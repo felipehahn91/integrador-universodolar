@@ -32,6 +32,7 @@ const Login = () => {
                 email_label: 'Seu email',
                 password_label: 'Sua senha',
                 button_label: 'Entrar',
+                link_text: '', // Remove o link "Não tem uma conta?"
               },
               forgotten_password: {
                 link_text: 'Esqueceu sua senha?',
