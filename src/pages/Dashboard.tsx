@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
@@ -15,7 +15,11 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
-import { Clock } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Clock, RefreshCw } from "lucide-react";
+import { showSuccess, showError, showLoading } from "@/utils/toast";
+import { Toaster, toast } from "sonner";
+
 
 const PAGE_SIZE = 15;
 
@@ -54,6 +58,8 @@ const fetchSettings = async () => {
 const Dashboard = () => {
   const navigate = useNavigate();
   const [currentPage, setCurrentPage] = useState(1);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data: contactsData, isLoading: isLoadingContacts } = useQuery({
     queryKey: ["magazord_contacts", currentPage],
@@ -75,6 +81,24 @@ const Dashboard = () => {
     queryKey: ["settings"],
     queryFn: fetchSettings,
   });
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    const toastId = showLoading("Iniciando sincronização manual...");
+    
+    const { error } = await supabase.functions.invoke('incremental-sync');
+    
+    toast.dismiss(toastId);
+
+    if (error) {
+      showError(`Falha ao iniciar: ${error.message}`);
+    } else {
+      showSuccess("Sincronização iniciada. A tabela será atualizada em breve.");
+      queryClient.invalidateQueries({ queryKey: ['sync_history'] });
+    }
+    
+    setIsSyncing(false);
+  };
 
   const formatStatus = (status: string) => {
     switch (status) {
@@ -109,9 +133,15 @@ const Dashboard = () => {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Histórico de Sincronizações</CardTitle>
-          <CardDescription>Registros das últimas sincronizações automáticas.</CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Histórico de Sincronizações</CardTitle>
+            <CardDescription>Registros das últimas sincronizações.</CardDescription>
+          </div>
+          <Button onClick={handleManualSync} disabled={isSyncing} size="sm">
+            <RefreshCw className={`mr-2 h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
+            Sincronizar Agora
+          </Button>
         </CardHeader>
         <CardContent>
           <Table>
