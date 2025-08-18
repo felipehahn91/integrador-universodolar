@@ -185,7 +185,13 @@ serve(async (req) => {
 
       } catch (error) {
         errorCount++;
-        logs.push(`${timestamp()} -> ERRO ao processar ${contact.email}: ${error.message}`);
+        const errorDetails = error && typeof error === 'object' && 'message' in error ? String(error.message) : JSON.stringify(error);
+        logs.push(`${timestamp()} -> ERRO ao processar ${contact.email}: ${errorDetails}`);
+        try {
+          logs.push(`${timestamp()} -> DADOS DO CONTATO COM FALHA: ${JSON.stringify(contact, null, 2)}`);
+        } catch {
+          logs.push(`${timestamp()} -> DADOS DO CONTATO COM FALHA: (Não foi possível serializar os dados)`);
+        }
         console.error(`Falha ao processar o contato ${contact.email}:`, error);
       }
     }
