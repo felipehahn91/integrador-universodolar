@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { PanelLeft, Settings, LayoutDashboard, LogOut } from "lucide-react";
+import { PanelLeft, Settings, LayoutDashboard, LogOut, Users } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { MadeWithDyad } from "./made-with-dyad";
 
@@ -15,6 +15,7 @@ const Layout = () => {
 
   const navItems = [
     { to: "/", icon: <LayoutDashboard className="h-5 w-5" />, label: "Dashboard" },
+    { to: "/users", icon: <Users className="h-5 w-5" />, label: "Usuários" },
     { to: "/settings", icon: <Settings className="h-5 w-5" />, label: "Configurações" },
   ];
 

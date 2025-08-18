@@ -25,19 +25,13 @@ const Login = () => {
           supabaseClient={supabase}
           appearance={{ theme: ThemeSupa }}
           providers={[]}
+          view="sign_in"
           localization={{
             variables: {
               sign_in: {
                 email_label: 'Seu email',
                 password_label: 'Sua senha',
                 button_label: 'Entrar',
-                link_text: 'Já tem uma conta? Entre',
-              },
-              sign_up: {
-                email_label: 'Seu email',
-                password_label: 'Sua senha',
-                button_label: 'Cadastrar',
-                link_text: 'Não tem uma conta? Cadastre-se',
               },
               forgotten_password: {
                 link_text: 'Esqueceu sua senha?',
