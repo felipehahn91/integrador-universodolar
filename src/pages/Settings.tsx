@@ -9,7 +9,7 @@ import { showSuccess, showError } from "@/utils/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const Settings = () => {
-  const [syncInterval, setSyncInterval] = useState(6); // Default to 6 hours
+  const [syncInterval, setSyncInterval] = useState(6);
   const [batchSize, setBatchSize] = useState(50);
   const [excludedDomains, setExcludedDomains] = useState("");
   const [loading, setLoading] = useState(true);
@@ -28,8 +28,7 @@ const Settings = () => {
         showError("Erro ao carregar configurações.");
         console.error(error);
       } else if (data) {
-        // Assuming sync_interval_minutes is now sync_interval_hours
-        setSyncInterval(data.sync_interval_minutes || 6); 
+        setSyncInterval(data.sync_interval_hours || 6); 
         setBatchSize(data.batch_size);
         setExcludedDomains(data.excluded_domains.join("\n"));
       }
@@ -43,22 +42,35 @@ const Settings = () => {
     setIsSaving(true);
     const domainsArray = excludedDomains.split("\n").filter(d => d.trim() !== "");
     
-    const { error } = await supabase
+    // 1. Atualiza a tabela de configurações no banco
+    const { error: updateError } = await supabase
       .from("settings")
       .update({
-        // Assuming sync_interval_minutes is now sync_interval_hours
-        sync_interval_minutes: syncInterval,
+        sync_interval_hours: syncInterval,
         batch_size: batchSize,
         excluded_domains: domainsArray,
       })
       .eq("singleton_key", 1);
 
-    if (error) {
+    if (updateError) {
       showError("Erro ao salvar configurações.");
-      console.error(error);
-    } else {
-      showSuccess("Configurações salvas com sucesso!");
+      console.error(updateError);
+      setIsSaving(false);
+      return;
     }
+
+    // 2. Invoca a função para atualizar o agendamento
+    const { error: functionError } = await supabase.functions.invoke('update-sync-schedule', {
+      body: { intervalHours: syncInterval },
+    });
+
+    if (functionError) {
+      showError("Configurações salvas, mas falha ao reagendar a tarefa automática.");
+      console.error(functionError);
+    } else {
+      showSuccess("Configurações salvas e tarefa automática reagendada com sucesso!");
+    }
+    
     setIsSaving(false);
   };
 
@@ -92,11 +104,12 @@ const Settings = () => {
               <Input
                 id="syncInterval"
                 type="number"
+                min="1"
                 value={syncInterval}
                 onChange={(e) => setSyncInterval(Number(e.target.value))}
               />
                <p className="text-sm text-muted-foreground">
-                A automação deve ser configurada no painel da Supabase para usar este intervalo.
+                Define a frequência com que a sincronização automática será executada.
               </p>
             </div>
             <div className="space-y-2">

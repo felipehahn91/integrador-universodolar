@@ -15,6 +15,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import { Clock } from "lucide-react";
 
 const PAGE_SIZE = 15;
 
@@ -35,7 +36,17 @@ const fetchSyncHistory = async () => {
     .from('sync_jobs')
     .select('*')
     .order('created_at', { ascending: false })
-    .limit(100); // Limita a 100 registros para não sobrecarregar
+    .limit(100);
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+const fetchSettings = async () => {
+  const { data, error } = await supabase
+    .from("settings")
+    .select("sync_interval_hours")
+    .eq("singleton_key", 1)
+    .single();
   if (error) throw new Error(error.message);
   return data;
 }
@@ -57,7 +68,12 @@ const Dashboard = () => {
   const { data: syncHistory, isLoading: isLoadingHistory } = useQuery({
     queryKey: ["sync_history"],
     queryFn: fetchSyncHistory,
-    refetchInterval: 30000, // Atualiza o histórico a cada 30 segundos
+    refetchInterval: 30000,
+  });
+
+  const { data: settings, isLoading: isLoadingSettings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: fetchSettings,
   });
 
   const formatStatus = (status: string) => {
@@ -71,6 +87,27 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-6">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Sincronização Automática</CardTitle>
+            <Clock className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            {isLoadingSettings ? (
+              <Skeleton className="h-8 w-3/4" />
+            ) : (
+              <div className="text-2xl font-bold">
+                A cada {settings?.sync_interval_hours} hora(s)
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              A tarefa é executada no início de cada intervalo.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle>Histórico de Sincronizações</CardTitle>
@@ -169,7 +206,7 @@ const Dashboard = () => {
                   <PaginationPrevious
                     href="#"
                     onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.max(p - 1, 1)); }}
-                    className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                    className={currentPage === 1 ? "pointer-events-none opacity-50" : "" }
                   />
                 </PaginationItem>
                 <PaginationItem className="text-sm text-muted-foreground">
