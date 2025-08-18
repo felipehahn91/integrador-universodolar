@@ -6,52 +6,14 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// --- Mautic API Helper ---
-// Esta função cria ou atualiza um contato no Mautic
+// --- Mautic API Helper (Temporariamente desativado para simulação) ---
 async function pushToMautic(contactData: any) {
-  const mauticUrl = Deno.env.get('MAUTIC_BASE_URL') || 'https://marketing.mautic5-web.mldmuf.easypanel.host/';
-  const mauticUser = Deno.env.get('MAUTIC_USERNAME');
-  const mauticPassword = Deno.env.get('MAUTIC_PASSWORD');
-
-  if (!mauticUrl || !mauticUser || !mauticPassword) {
-    throw new Error('As credenciais da API Mautic não foram configuradas nos segredos.');
-  }
-
-  const endpoint = `${mauticUrl}api/contacts/new`;
-
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': 'Basic ' + btoa(`${mauticUser}:${mauticPassword}`),
-  };
-
-  const [firstName, ...lastNameParts] = contactData.Nome.split(' ');
-  const lastName = lastNameParts.join(' ');
-
-  const payload = {
-    firstname: firstName,
-    lastname: lastName || firstName, // Mautic exige um sobrenome
-    email: contactData.Email,
-    mobile: contactData.TelefoneCelular,
-    tags: contactData.tags || [],
-    // IMPORTANTE: Estes são os campos personalizados que você precisa criar no Mautic.
-    total_compras: contactData.total_compras,
-    valor_total_gasto: contactData.valor_total_gasto,
-    overwriteWithBlank: false,
-  };
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: headers,
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    console.error(`Erro ao enviar contato ${contactData.Email} para o Mautic:`, errorBody);
-    throw new Error(`Erro Mautic: ${response.status}`);
-  }
-
-  return await response.json();
+  console.log(`[SIMULAÇÃO] Enviando para o Mautic: ${contactData.Email}`);
+  // A linha abaixo está comentada para não enviar dados reais durante o teste.
+  // return Promise.resolve({ success: true }); 
+  
+  // Simula uma chamada de API bem-sucedida
+  return { contact: { id: Math.floor(Math.random() * 1000) } };
 }
 
 
@@ -111,11 +73,11 @@ serve(async (req) => {
 
     let successCount = 0;
     let errorCount = 0;
+    const processedContactsForPreview = []; // Array para guardar os dados para visualização
 
     for (const contact of contactsToProcess) {
       try {
         // --- 3. Enriquece Contato com Dados de Pedidos ---
-        console.log(`Processando contato: ${contact.Email}`);
         const ordersEndpoint = `${magazordBaseUrl}/pedidos?CpfCnpj=${contact.CpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
           headers: { 'token': magazordApiToken, 'secret': magazordApiSecret },
@@ -131,8 +93,6 @@ serve(async (req) => {
           const deliveredOrders = orders.filter(o => o.Status === 'Entregue');
           total_compras = deliveredOrders.length;
           valor_total_gasto = deliveredOrders.reduce((sum, order) => sum + (parseFloat(order.ValorTotal) || 0), 0);
-        } else {
-          console.warn(`Não foi possível buscar pedidos para ${contact.CpfCnpj}. Status: ${ordersResponse.status}`);
         }
 
         contact.total_compras = total_compras;
@@ -146,20 +106,27 @@ serve(async (req) => {
         if (contact.Sexo === 'M') contact.tags.push('Masculino');
         else if (contact.Sexo === 'F') contact.tags.push('Feminino');
 
-        // --- 5. Envia para o Mautic ---
+        // --- 5. Envia para o Mautic (SIMULAÇÃO) ---
+        // A função pushToMautic agora está em modo de simulação e não envia dados reais.
         await pushToMautic(contact);
         successCount++;
+        
+        // Adiciona os primeiros 5 contatos processados ao array de visualização
+        if (processedContactsForPreview.length < 5) {
+            processedContactsForPreview.push(contact);
+        }
+
       } catch (error) {
         errorCount++;
         console.error(`Falha ao processar o contato ${contact.Email}:`, error.message);
       }
     }
 
-    const message = `Sincronização concluída. Processados: ${contactsToProcess.length}. Sucessos: ${successCount}. Falhas: ${errorCount}.`;
+    const message = `Simulação concluída. Processados: ${contactsToProcess.length}. Sucessos: ${successCount}. Falhas: ${errorCount}.`;
     console.log(message);
 
     return new Response(
-      JSON.stringify({ message }),
+      JSON.stringify({ message, processedContacts: processedContactsForPreview }), // Retorna os contatos para o frontend
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     )
   } catch (error) {
