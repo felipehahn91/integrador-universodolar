@@ -11,11 +11,15 @@ import { Link } from "react-router-dom";
 const Index = () => {
   const [syncResult, setSyncResult] = useState<any[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
 
   const handleSync = async () => {
     setIsLoading(true);
     setSyncResult(null);
+    setLogs([]);
     const toastId = showLoading("Iniciando simulação...");
+    setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Iniciando simulação...`]);
+
     try {
       const { data, error } = await supabase.functions.invoke("sync-magazord-mautic");
 
@@ -26,11 +30,14 @@ const Index = () => {
       }
       
       showSuccess(data.message || "Simulação concluída com sucesso!");
+      setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${data.message}`]);
       setSyncResult(data.processedContacts);
 
     } catch (err: any) {
       dismissToast(toastId);
-      showError(err.message || "Falha ao iniciar a simulação.");
+      const errorMessage = err.message || "Falha ao iniciar a simulação.";
+      showError(errorMessage);
+      setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Erro: ${errorMessage}`]);
       console.error("Sync error:", err);
     } finally {
       setIsLoading(false);
@@ -52,6 +59,19 @@ const Index = () => {
             <Link to="/settings">Acessar Configurações</Link>
           </Button>
         </div>
+
+        {logs.length > 0 && (
+          <Card className="mt-8 text-left">
+            <CardHeader>
+              <CardTitle>Log da Simulação</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <pre className="bg-gray-900 text-white p-4 rounded-md overflow-x-auto text-sm">
+                {logs.join("\n")}
+              </pre>
+            </CardContent>
+          </Card>
+        )}
 
         {syncResult && (
           <Card className="mt-8 text-left">

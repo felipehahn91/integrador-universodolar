@@ -9,10 +9,6 @@ const corsHeaders = {
 // --- Mautic API Helper (Temporariamente desativado para simulação) ---
 async function pushToMautic(contactData: any) {
   console.log(`[SIMULAÇÃO] Enviando para o Mautic: ${contactData.Email}`);
-  // A linha abaixo está comentada para não enviar dados reais durante o teste.
-  // return Promise.resolve({ success: true }); 
-  
-  // Simula uma chamada de API bem-sucedida
   return { contact: { id: Math.floor(Math.random() * 1000) } };
 }
 
@@ -23,6 +19,11 @@ serve(async (req) => {
   }
 
   try {
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+    
     // --- Pega Segredos e Configurações ---
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
@@ -30,11 +31,6 @@ serve(async (req) => {
     if (!magazordApiToken || !magazordApiSecret) {
       throw new Error('As credenciais da API Magazord não foram configuradas nos segredos.');
     }
-
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
 
     const { data: settings, error: settingsError } = await supabaseAdmin
       .from('settings')
@@ -45,8 +41,8 @@ serve(async (req) => {
     if (settingsError) throw settingsError;
 
     // --- 1. Busca Contatos da Magazord ---
-    const magazordBaseUrl = 'https://api.magazord.com.br/v1'; // URL CORRIGIDA
-    const contactsEndpoint = `${magazordBaseUrl}/pessoa`; // ENDPOINT CORRIGIDO
+    const magazordBaseUrl = 'https://api.magazord.com.br/v1';
+    const contactsEndpoint = `${magazordBaseUrl}/pessoa`;
     
     console.log('Buscando contatos da Magazord...');
     const contactsResponse = await fetch(contactsEndpoint, {
@@ -63,7 +59,7 @@ serve(async (req) => {
     // --- 2. Filtra e Processa Contatos em Lotes ---
     const excludedDomains = new Set(settings.excluded_domains || []);
     const filteredContacts = allContacts.filter(contact => {
-      if (!contact.Email) return false;
+      if (!contact.Email || !contact.Codigo) return false;
       const domain = contact.Email.split('@')[1];
       return domain && !excludedDomains.has(domain.toLowerCase());
     });
@@ -73,12 +69,12 @@ serve(async (req) => {
 
     let successCount = 0;
     let errorCount = 0;
-    const processedContactsForPreview = []; // Array para guardar os dados para visualização
+    const processedContactsForPreview = [];
 
     for (const contact of contactsToProcess) {
       try {
         // --- 3. Enriquece Contato com Dados de Pedidos ---
-        const ordersEndpoint = `${magazordBaseUrl}/pedido?CpfCnpj=${contact.CpfCnpj}`; // ENDPOINT CORRIGIDO
+        const ordersEndpoint = `${magazordBaseUrl}/pedido?CpfCnpj=${contact.CpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
           headers: { 'token': magazordApiToken, 'secret': magazordApiSecret },
         });
@@ -89,29 +85,45 @@ serve(async (req) => {
         if (ordersResponse.ok) {
           const ordersResult = await ordersResponse.json();
           const orders = ordersResult.registros || [];
-          
           const deliveredOrders = orders.filter(o => o.Status === 'Entregue');
           total_compras = deliveredOrders.length;
           valor_total_gasto = deliveredOrders.reduce((sum, order) => sum + (parseFloat(order.ValorTotal) || 0), 0);
         }
 
-        contact.total_compras = total_compras;
-        contact.valor_total_gasto = valor_total_gasto;
-
         // --- 4. Adiciona Tags ---
-        contact.tags = [];
-        if (contact.PessoaFisicaJuridica === 'F') contact.tags.push('Pessoa Física');
-        else if (contact.PessoaFisicaJuridica === 'J') contact.tags.push('Pessoa Jurídica');
-        
-        if (contact.Sexo === 'M') contact.tags.push('Masculino');
-        else if (contact.Sexo === 'F') contact.tags.push('Feminino');
+        const tags = [];
+        if (contact.PessoaFisicaJuridica === 'F') tags.push('Pessoa Física');
+        else if (contact.PessoaFisicaJuridica === 'J') tags.push('Pessoa Jurídica');
+        if (contact.Sexo === 'M') tags.push('Masculino');
+        else if (contact.Sexo === 'F') tags.push('Feminino');
 
-        // --- 5. Envia para o Mautic (SIMULAÇÃO) ---
+        // --- 5. Prepara dados para o banco ---
+        const contactForDb = {
+          magazord_id: contact.Codigo,
+          nome: contact.Nome,
+          email: contact.Email,
+          cpf_cnpj: contact.CpfCnpj,
+          tipo_pessoa: contact.PessoaFisicaJuridica,
+          sexo: contact.Sexo,
+          total_compras: total_compras,
+          valor_total_gasto: valor_total_gasto,
+          tags: tags,
+          last_processed_at: new Date().toISOString(),
+        };
+
+        // --- 6. Salva no Supabase ---
+        const { error: upsertError } = await supabaseAdmin
+          .from('magazord_contacts')
+          .upsert(contactForDb, { onConflict: 'magazord_id' });
+
+        if (upsertError) throw upsertError;
+
+        // --- 7. Envia para o Mautic (SIMULAÇÃO) ---
         await pushToMautic(contact);
         successCount++;
         
         if (processedContactsForPreview.length < 5) {
-            processedContactsForPreview.push(contact);
+            processedContactsForPreview.push({ ...contact, total_compras, valor_total_gasto, tags });
         }
 
       } catch (error) {
@@ -120,7 +132,7 @@ serve(async (req) => {
       }
     }
 
-    const message = `Simulação concluída. Processados: ${contactsToProcess.length}. Sucessos: ${successCount}. Falhas: ${errorCount}.`;
+    const message = `Simulação concluída. Processados: ${contactsToProcess.length}. Salvos no DB: ${successCount}. Falhas: ${errorCount}.`;
     console.log(message);
 
     return new Response(
