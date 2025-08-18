@@ -99,6 +99,17 @@ serve(async (req) => {
     for (const contact of contactsToProcess) {
       try {
         logs.push(`${timestamp()} Processando ${contact.email} (ID: ${contact.id})...`);
+        const magazordContactId = String(contact.id);
+
+        const { data: existingContact, error: selectError } = await supabaseAdmin
+          .from('magazord_contacts')
+          .select('id')
+          .eq('magazord_id', magazordContactId)
+          .single();
+
+        if (selectError && selectError.code !== 'PGRST116') { // PGRST116 = 0 rows
+          throw new Error(`Erro ao checar contato: ${selectError.message}`);
+        }
         
         const tags = [];
         let tipoPessoa = null;
@@ -109,27 +120,43 @@ serve(async (req) => {
           tags.push('Pessoa Jurídica');
           tipoPessoa = 'J';
         }
-        
         if (contact.sexo === 'M') tags.push('Masculino');
         else if (contact.sexo === 'F') tags.push('Feminino');
 
-        const { data: dbContact, error: upsertError } = await supabaseAdmin
-          .from('magazord_contacts')
-          .upsert({
-            magazord_id: String(contact.id),
-            nome: contact.nome,
-            email: contact.email,
-            cpf_cnpj: contact.cpfCnpj,
-            tipo_pessoa: tipoPessoa,
-            sexo: contact.sexo,
-            tags: tags,
-            last_processed_at: new Date().toISOString(),
-          }, { onConflict: 'magazord_id' })
-          .select('id')
-          .single();
+        const contactData = {
+          nome: contact.nome,
+          email: contact.email,
+          cpf_cnpj: contact.cpfCnpj,
+          tipo_pessoa: tipoPessoa,
+          sexo: contact.sexo,
+          tags: tags,
+          last_processed_at: new Date().toISOString(),
+        };
 
-        if (upsertError) throw upsertError;
-        logs.push(`${timestamp()} -> Contato ${contact.email} salvo/atualizado no DB.`);
+        let dbContactId;
+
+        if (existingContact) {
+          logs.push(`${timestamp()} -> Contato ${contact.email} já existe. Atualizando...`);
+          const { error: updateError } = await supabaseAdmin
+            .from('magazord_contacts')
+            .update(contactData)
+            .eq('magazord_id', magazordContactId);
+          
+          if (updateError) throw updateError;
+          dbContactId = existingContact.id;
+          logs.push(`${timestamp()} -> Contato atualizado no DB.`);
+        } else {
+          logs.push(`${timestamp()} -> Contato ${contact.email} é novo. Inserindo...`);
+          const { data: newDbContact, error: insertError } = await supabaseAdmin
+            .from('magazord_contacts')
+            .insert({ ...contactData, magazord_id: magazordContactId })
+            .select('id')
+            .single();
+          
+          if (insertError) throw insertError;
+          dbContactId = newDbContact.id;
+          logs.push(`${timestamp()} -> Contato inserido no DB com ID: ${dbContactId}.`);
+        }
 
         const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.cpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
@@ -149,7 +176,7 @@ serve(async (req) => {
           
           if (deliveredOrders.length > 0) {
             const ordersForDb = deliveredOrders.map(order => ({
-              contact_id: dbContact.id,
+              contact_id: dbContactId,
               magazord_order_id: String(order.Id),
               valor_total: parseFloat(order.ValorTotal) || 0,
               status: order.Status,
@@ -172,7 +199,7 @@ serve(async (req) => {
             total_compras: total_compras,
             valor_total_gasto: valor_total_gasto,
           })
-          .eq('id', dbContact.id);
+          .eq('id', dbContactId);
 
         if (updateTotalError) throw updateTotalError;
 
