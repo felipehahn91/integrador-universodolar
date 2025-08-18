@@ -14,6 +14,7 @@ async function updateJobProgress(
   newLogs: string[], 
   processed: number, 
   total: number,
+  lastPage: number,
   status: 'running' | 'completed' | 'failed' = 'running'
 ) {
   const { error } = await supabase
@@ -22,6 +23,7 @@ async function updateJobProgress(
       logs: newLogs,
       processed_count: processed,
       total_count: total,
+      last_processed_page: lastPage,
       status: status
     })
     .eq('id', jobId);
@@ -36,46 +38,56 @@ serve(async (req) => {
   let jobId = '';
   const logs: string[] = [];
 
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
+
   try {
     const { limit = null, jobId: receivedJobId } = await req.json();
     if (!receivedJobId) throw new Error("jobId is required to run a sync.");
     jobId = receivedJobId;
 
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const { data: jobData, error: jobFetchError } = await supabaseAdmin
+      .from('sync_jobs')
+      .select('last_processed_page, logs')
+      .eq('id', jobId)
+      .single();
 
+    if (jobFetchError) throw jobFetchError;
+
+    // Use existing logs if resuming
+    logs.push(...(jobData.logs || []));
+    logs.push(`${timestamp()} Job ${jobId} iniciado/continuado.`);
+    
     await supabaseAdmin.from('sync_jobs').update({ status: 'running' }).eq('id', jobId);
-    logs.push(`${timestamp()} Job ${jobId} iniciado.`);
     
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
     if (!magazordApiToken || !magazordApiSecret) throw new Error('Credenciais da API Magazord não configuradas.');
 
     const authHeader = `Basic ${btoa(`${magazordApiToken}:${magazordApiSecret}`)}`;
-    
     const { data: settings, error: settingsError } = await supabaseAdmin.from('settings').select('*').eq('singleton_key', 1).single();
     if (settingsError) throw settingsError;
 
     const magazordBaseUrl = 'https://expresso10.painel.magazord.com.br/api';
     const excludedDomains = new Set(settings.excluded_domains || []);
     
-    let currentPage = 1;
+    let currentPage = (jobData.last_processed_page || 0) + 1;
     let hasMorePages = true;
     let totalAvailable = 0;
     let totalProcessedInThisRun = 0;
     let totalFailuresInThisRun = 0;
 
-    logs.push(`${timestamp()} Iniciando coleta e processamento de contatos...`);
-    await updateJobProgress(supabaseAdmin, jobId, logs, 0, 0);
+    logs.push(`${timestamp()} Iniciando da página ${currentPage}.`);
+    await updateJobProgress(supabaseAdmin, jobId, logs, 0, 0, currentPage - 1);
 
     while (hasMorePages) {
       const endpoint = `${magazordBaseUrl}/v2/site/pessoa?page=${currentPage}&orderBy=id&orderDirection=asc&limit=100`;
       const response = await fetch(endpoint, { headers: { 'Authorization': authHeader } });
       if (!response.ok) {
-        logs.push(`${timestamp()} Aviso: Falha ao buscar página ${currentPage}. Parando.`);
-        break;
+        logs.push(`${timestamp()} Aviso: Falha ao buscar página ${currentPage}. A API pode estar instável. Parando para tentar novamente mais tarde.`);
+        throw new Error(`API request failed with status ${response.status}`);
       }
       const result = await response.json();
       const rawContacts = result.data?.items || [];
@@ -83,7 +95,6 @@ serve(async (req) => {
       if (currentPage === 1) {
         totalAvailable = result.data?.total || 0;
         logs.push(`${timestamp()} API reporta ${totalAvailable} contatos disponíveis.`);
-        await updateJobProgress(supabaseAdmin, jobId, logs, 0, totalAvailable);
       }
 
       if (rawContacts.length === 0) {
@@ -94,39 +105,19 @@ serve(async (req) => {
       logs.push(`${timestamp()} Processando página ${currentPage} com ${rawContacts.length} contatos.`);
 
       for (const contact of rawContacts) {
+        // ... (lógica de processamento de contato individual permanece a mesma)
         const domain = contact.email?.split('@')[1];
-        if (!contact.id || !contact.email || (domain && excludedDomains.has(domain.toLowerCase()))) {
-          continue;
-        }
-
+        if (!contact.id || !contact.email || (domain && excludedDomains.has(domain.toLowerCase()))) continue;
         try {
           const magazordContactId = String(contact.id);
           const { data: existingContact } = await supabaseAdmin.from('magazord_contacts').select('id').eq('magazord_id', magazordContactId).single();
-          
           if (existingContact) {
-            // Se o contato já existe, pulamos o processamento pesado para acelerar.
-            // Apenas atualizamos o timestamp para saber que ele foi "visto".
             await supabaseAdmin.from('magazord_contacts').update({ last_processed_at: new Date().toISOString() }).eq('id', existingContact.id);
-            continue; // Pula para o próximo contato da página
+            continue;
           }
-
-          // Processamento completo apenas para contatos novos
-          const contactData = {
-            nome: contact.nome,
-            email: contact.email,
-            cpf_cnpj: contact.cpfCnpj,
-            tipo_pessoa: contact.tipo === 1 ? 'F' : (contact.tipo === 2 ? 'J' : null),
-            sexo: contact.sexo,
-            last_processed_at: new Date().toISOString(),
-          };
-
-          const { data: newDbContact, error: insertError } = await supabaseAdmin
-            .from('magazord_contacts')
-            .insert({ ...contactData, magazord_id: magazordContactId })
-            .select('id')
-            .single();
+          const contactData = { nome: contact.nome, email: contact.email, cpf_cnpj: contact.cpfCnpj, tipo_pessoa: contact.tipo === 1 ? 'F' : (contact.tipo === 2 ? 'J' : null), sexo: contact.sexo, last_processed_at: new Date().toISOString() };
+          const { error: insertError } = await supabaseAdmin.from('magazord_contacts').insert({ ...contactData, magazord_id: magazordContactId });
           if (insertError) throw insertError;
-
           totalProcessedInThisRun++;
         } catch (e) {
           totalFailuresInThisRun++;
@@ -134,8 +125,8 @@ serve(async (req) => {
         }
       }
 
-      logs.push(`${timestamp()} Fim da página ${currentPage}. Novos contatos salvos: ${totalProcessedInThisRun}.`);
-      await updateJobProgress(supabaseAdmin, jobId, logs, totalProcessedInThisRun, totalAvailable);
+      logs.push(`${timestamp()} Fim da página ${currentPage}. Novos contatos salvos nesta execução: ${totalProcessedInThisRun}.`);
+      await updateJobProgress(supabaseAdmin, jobId, logs, totalProcessedInThisRun, totalAvailable, currentPage);
       currentPage++;
 
       if (limit && totalProcessedInThisRun >= limit) {
@@ -151,10 +142,10 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true, message: "Job completed." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    const errorMessage = `Erro fatal na função: ${error.message}`;
+    const errorMessage = `Erro na função: ${error.message}. O trabalho foi pausado e pode ser continuado.`;
     logs.push(`${timestamp()} ${errorMessage}`);
     if (jobId) {
-      await supabaseAdmin.from('sync_jobs').update({ status: 'failed', logs, finished_at: new Date().toISOString() }).eq('id', jobId);
+      await supabaseAdmin.from('sync_jobs').update({ status: 'failed', logs }).eq('id', jobId);
     }
     return new Response(JSON.stringify({ success: false, error: { message: errorMessage }, logs }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }

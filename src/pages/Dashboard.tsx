@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -50,12 +50,38 @@ const fetchJobStatus = async (jobId: string) => {
   return data;
 }
 
+const fetchLastIncompleteJob = async () => {
+  const { data, error } = await supabase
+    .from('sync_jobs')
+    .select('id, status')
+    .in('status', ['running', 'failed'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+  
+  if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
+    console.error("Error fetching last incomplete job:", error);
+  }
+  return data;
+}
+
 const Dashboard = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [syncAmount, setSyncAmount] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+
+  // Check for an incomplete job on component load
+  useQuery({
+    queryKey: ['last_incomplete_job'],
+    queryFn: fetchLastIncompleteJob,
+    onSuccess: (data) => {
+      if (data && !activeJobId) {
+        setActiveJobId(data.id);
+      }
+    }
+  });
 
   const { data: contactsData, isLoading: isLoadingContacts } = useQuery({
     queryKey: ["magazord_contacts", currentPage],
@@ -81,15 +107,15 @@ const Dashboard = () => {
       return status === 'running' || status === 'pending' ? 2000 : false;
     },
     onSuccess: (data) => {
-      if (data.status === 'completed' || data.status === 'failed') {
+      if (data.status === 'completed') {
         setActiveJobId(null);
         queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
         queryClient.invalidateQueries({ queryKey: ["sync_stats"] });
-        if (data.status === 'completed') {
-          showSuccess("Sincronização concluída com sucesso!");
-        } else {
-          showError("A sincronização falhou. Verifique os logs.");
-        }
+        queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
+        showSuccess("Sincronização concluída com sucesso!");
+      } else if (data.status === 'failed') {
+        queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
+        showError("A sincronização foi interrompida. Você pode continuá-la.");
       }
     }
   });
@@ -101,45 +127,43 @@ const Dashboard = () => {
       return;
     }
 
-    // 1. Create the job record to get an ID immediately
-    const { data: newJob, error: createJobError } = await supabase
-      .from('sync_jobs')
-      .insert({ user_id: user.id, status: 'pending' })
-      .select('id')
-      .single();
+    let jobIdToUse = activeJobId;
 
-    if (createJobError || !newJob) {
-      showError("Não foi possível iniciar o trabalho de sincronização.");
-      console.error(createJobError);
+    // If there's an active job but it's not failed, don't do anything
+    if (jobStatus && jobStatus.status !== 'failed') {
+      showError("Uma sincronização já está em andamento.");
       return;
     }
 
-    const jobId = newJob.id;
-    setActiveJobId(jobId); // 2. Update UI immediately
+    // If there is no active failed job, create a new one
+    if (!jobIdToUse || (jobStatus && jobStatus.status !== 'failed')) {
+      const { data: newJob, error: createJobError } = await supabase
+        .from('sync_jobs')
+        .insert({ user_id: user.id, status: 'pending' })
+        .select('id')
+        .single();
 
-    // 3. Invoke the function in the background.
-    // We don't need to wait for its response because the polling mechanism handles UI updates.
+      if (createJobError || !newJob) {
+        showError("Não foi possível iniciar o trabalho de sincronização.");
+        return;
+      }
+      jobIdToUse = newJob.id;
+      setActiveJobId(jobIdToUse);
+    }
+    
+    // Invoke the function with the determined job ID
     supabase.functions.invoke("sync-magazord-mautic", {
-      body: { limit, jobId },
+      body: { limit, jobId: jobIdToUse },
     }).then(({ error }) => {
       if (error) {
-        // If the function invocation itself fails, update the job status to 'failed'.
         console.error("Function invocation failed:", error);
         showError(`Falha ao chamar a função de sincronização: ${error.message}`);
-        supabase
-          .from('sync_jobs')
-          .update({ 
-            status: 'failed', 
-            logs: ['Erro: A chamada para a função de sincronização falhou.'],
-            finished_at: new Date().toISOString()
-          })
-          .eq('id', jobId)
-          .then();
       }
     });
   };
   
-  const isSyncing = !!activeJobId;
+  const isSyncing = jobStatus?.status === 'running' || jobStatus?.status === 'pending';
+  const hasFailedJob = jobStatus?.status === 'failed';
   const logs = jobStatus?.logs || [];
   const progress = jobStatus && jobStatus.total_count > 0 
     ? (jobStatus.processed_count / jobStatus.total_count) * 100 
@@ -170,7 +194,9 @@ const Dashboard = () => {
         <Card>
           <CardHeader>
             <CardTitle>Sincronização Manual</CardTitle>
-            <CardDescription>Escolha quantos contatos deseja sincronizar.</CardDescription>
+            <CardDescription>
+              {hasFailedJob ? "Uma sincronização foi interrompida. Continue de onde parou." : "Escolha quantos contatos deseja sincronizar."}
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex items-end gap-4">
             <div className="flex-1">
@@ -184,21 +210,21 @@ const Dashboard = () => {
               />
             </div>
             <Button onClick={() => handleSync(syncAmount)} disabled={isSyncing}>
-              {isSyncing ? "Sincronizando..." : "Sincronizar"}
+              {isSyncing ? "Sincronizando..." : (hasFailedJob ? "Continuar" : "Sincronizar")}
             </Button>
             <Button onClick={() => handleSync(null)} disabled={isSyncing} variant="secondary">
-              {isSyncing ? "Sincronizando..." : "Sincronizar Tudo"}
+              {isSyncing ? "Sincronizando..." : (hasFailedJob ? "Continuar Tudo" : "Sincronizar Tudo")}
             </Button>
           </CardContent>
         </Card>
       </div>
 
-      {isSyncing && jobStatus && (
+      {activeJobId && jobStatus && (
         <Card>
           <CardHeader>
             <CardTitle>Progresso da Sincronização</CardTitle>
             <CardDescription>
-              Status: {jobStatus.status} ({jobStatus.processed_count} / {jobStatus.total_count})
+              Status: {jobStatus.status} ({jobStatus.processed_count} / {jobStatus.total_count}) - Página: {jobStatus.last_processed_page}
             </CardDescription>
           </CardHeader>
           <CardContent>
