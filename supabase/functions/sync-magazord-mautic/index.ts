@@ -54,12 +54,12 @@ serve(async (req) => {
     const excludedDomains = new Set(settings.excluded_domains || []);
     const desiredCount = limit === null ? Infinity : limit;
 
-    let collectedFilteredContacts = [];
+    const collectedContactsMap = new Map();
     let currentPage = 1;
     let hasMorePages = true;
     logs.push(`${timestamp()} Iniciando coleta de contatos da API Magazord com paginação...`);
 
-    while (hasMorePages && collectedFilteredContacts.length < desiredCount) {
+    while (hasMorePages && collectedContactsMap.size < desiredCount) {
       const endpoint = `${magazordBaseUrl}/v2/site/pessoa?pagina=${currentPage}`;
       const response = await fetch(endpoint, { headers: { 'Authorization': authHeader } });
 
@@ -84,13 +84,18 @@ serve(async (req) => {
         return domain && !excludedDomains.has(domain.toLowerCase());
       });
 
-      collectedFilteredContacts.push(...filteredContactsFromPage);
-      logs.push(`${timestamp()} Página ${currentPage} carregada. Contatos válidos coletados: ${collectedFilteredContacts.length}.`);
+      for (const contact of filteredContactsFromPage) {
+        if (!collectedContactsMap.has(contact.id)) {
+          collectedContactsMap.set(contact.id, contact);
+        }
+      }
+
+      logs.push(`${timestamp()} Página ${currentPage} carregada. Contatos únicos coletados: ${collectedContactsMap.size}.`);
       currentPage++;
     }
 
-    const contactsToProcess = collectedFilteredContacts.slice(0, desiredCount);
-    logs.push(`${timestamp()} Coleta finalizada. Processando um lote de ${contactsToProcess.length} contatos.`);
+    const contactsToProcess = Array.from(collectedContactsMap.values()).slice(0, desiredCount);
+    logs.push(`${timestamp()} Coleta finalizada. Processando um lote de ${contactsToProcess.length} contatos únicos.`);
 
     let successCount = 0;
     let errorCount = 0;
