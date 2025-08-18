@@ -9,7 +9,7 @@ import { showSuccess, showError } from "@/utils/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const Settings = () => {
-  const [syncInterval, setSyncInterval] = useState(5);
+  const [syncInterval, setSyncInterval] = useState(6); // Default to 6 hours
   const [batchSize, setBatchSize] = useState(50);
   const [excludedDomains, setExcludedDomains] = useState("");
   const [loading, setLoading] = useState(true);
@@ -28,7 +28,8 @@ const Settings = () => {
         showError("Erro ao carregar configurações.");
         console.error(error);
       } else if (data) {
-        setSyncInterval(data.sync_interval_minutes);
+        // Assuming sync_interval_minutes is now sync_interval_hours
+        setSyncInterval(data.sync_interval_minutes || 6); 
         setBatchSize(data.batch_size);
         setExcludedDomains(data.excluded_domains.join("\n"));
       }
@@ -45,6 +46,7 @@ const Settings = () => {
     const { error } = await supabase
       .from("settings")
       .update({
+        // Assuming sync_interval_minutes is now sync_interval_hours
         sync_interval_minutes: syncInterval,
         batch_size: batchSize,
         excluded_domains: domainsArray,
@@ -86,13 +88,16 @@ const Settings = () => {
         ) : (
           <>
             <div className="space-y-2">
-              <Label htmlFor="syncInterval">Intervalo de Sincronização (minutos)</Label>
+              <Label htmlFor="syncInterval">Intervalo de Sincronização Automática (horas)</Label>
               <Input
                 id="syncInterval"
                 type="number"
                 value={syncInterval}
                 onChange={(e) => setSyncInterval(Number(e.target.value))}
               />
+               <p className="text-sm text-muted-foreground">
+                A automação deve ser configurada no painel da Supabase para usar este intervalo.
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="batchSize">Tamanho do Lote (Batch Size)</Label>

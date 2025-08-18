@@ -1,16 +1,13 @@
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
-import { showSuccess, showError } from "@/utils/toast";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate } from "react-router-dom";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
 import {
   Pagination,
   PaginationContent,
@@ -33,32 +30,18 @@ const fetchContacts = async (page: number) => {
   return { contacts: data, count };
 };
 
-const fetchSyncStats = async () => {
-  const { data, error } = await supabase.functions.invoke("get-sync-stats");
-  if (error) throw error;
-  if (!data.success) throw new Error(data.error.message);
-  return data.data;
-};
-
-// Busca o job mais recente, independentemente do status.
-const fetchLatestJob = async () => {
+const fetchSyncHistory = async () => {
   const { data, error } = await supabase
     .from('sync_jobs')
     .select('*')
     .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
-  
-  if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
-    console.error("Error fetching latest job:", error);
-  }
+    .limit(100); // Limita a 100 registros para não sobrecarregar
+  if (error) throw new Error(error.message);
   return data;
 }
 
 const Dashboard = () => {
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [syncAmount, setSyncAmount] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
 
   const { data: contactsData, isLoading: isLoadingContacts } = useQuery({
@@ -71,161 +54,66 @@ const Dashboard = () => {
   const totalContacts = contactsData?.count ?? 0;
   const totalPages = Math.ceil(totalContacts / PAGE_SIZE);
 
-  const { data: stats, isLoading: isLoadingStats } = useQuery({
-    queryKey: ["sync_stats"],
-    queryFn: fetchSyncStats,
+  const { data: syncHistory, isLoading: isLoadingHistory } = useQuery({
+    queryKey: ["sync_history"],
+    queryFn: fetchSyncHistory,
+    refetchInterval: 30000, // Atualiza o histórico a cada 30 segundos
   });
 
-  const { data: latestJob, refetch: refetchLatestJob } = useQuery({
-    queryKey: ['latest_job'],
-    queryFn: fetchLatestJob,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      // Continua atualizando enquanto o job mais recente não estiver concluído
-      return (status && status !== 'completed') ? 5000 : false;
-    },
-    onSuccess: (data) => {
-      // Se o job mais recente for concluído, exibe a notificação e atualiza os dados.
-      if (data?.status === 'completed') {
-        queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
-        queryClient.invalidateQueries({ queryKey: ["sync_stats"] });
-        showSuccess("Sincronização concluída com sucesso!");
-      }
-    }
-  });
-
-  // Um job é considerado "ativo" se ele for o mais recente E não estiver concluído.
-  const activeJob = latestJob && latestJob.status !== 'completed' ? latestJob : null;
-
-  const handleManualSync = async (limit: number) => {
-    if (activeJob) {
-      showError("Uma sincronização já está em andamento. Aguarde a conclusão.");
-      return;
-    }
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      showError("Você precisa estar logado para iniciar uma sincronização.");
-      return;
-    }
-
-    const { data: newJob, error: createJobError } = await supabase
-      .from('sync_jobs')
-      .insert({ user_id: user.id, status: 'pending', full_sync: false })
-      .select('id')
-      .single();
-
-    if (createJobError || !newJob) {
-      showError("Não foi possível iniciar o trabalho de sincronização.");
-      return;
-    }
-    
-    refetchLatestJob(); // Mostra o progresso imediatamente
-
-    const { error } = await supabase.functions.invoke("sync-magazord-mautic", {
-      body: { limit, jobId: newJob.id },
-    });
-
-    if (error) {
-      showError("Falha ao iniciar a sincronização manual.");
-      console.error(error);
+  const formatStatus = (status: string) => {
+    switch (status) {
+      case 'completed': return <Badge variant="default">Concluído</Badge>;
+      case 'running': return <Badge variant="secondary">Executando...</Badge>;
+      case 'failed': return <Badge variant="destructive">Falhou</Badge>;
+      default: return <Badge variant="outline">{status}</Badge>;
     }
   };
-
-  const handleFullSync = async () => {
-    if (activeJob) {
-      showError("Uma sincronização já está em andamento. Aguarde a conclusão.");
-      return;
-    }
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      showError("Você precisa estar logado para iniciar uma sincronização.");
-      return;
-    }
-
-    const { error } = await supabase
-      .from('sync_jobs')
-      .insert({ user_id: user.id, status: 'pending', full_sync: true, last_processed_page: 0 });
-
-    if (error) {
-      showError("Não foi possível agendar a sincronização completa.");
-    } else {
-      showSuccess("Sincronização completa agendada! O processo começará em breve e continuará automaticamente.");
-      refetchLatestJob();
-    }
-  };
-  
-  const isSyncing = !!activeJob;
-  const logs = activeJob?.logs || [];
-  const progress = activeJob && activeJob.total_count > 0 
-    ? ((activeJob.last_processed_page * 100) / activeJob.total_count) * 100
-    : 0;
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Status da Sincronização</CardTitle>
-          </CardHeader>
-          <CardContent className="flex justify-around text-center">
-            <div>
-              <p className="text-2xl font-bold">
-                {isLoadingStats ? <Skeleton className="h-8 w-16" /> : stats?.totalImported ?? 0}
-              </p>
-              <p className="text-sm text-muted-foreground">Contatos Importados</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold">
-                {isLoadingStats ? <Skeleton className="h-8 w-16" /> : stats?.totalAvailable ?? 0}
-              </p>
-              <p className="text-sm text-muted-foreground">Total Disponível</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Sincronização Manual</CardTitle>
-            <CardDescription>
-              Sincronize uma quantidade específica ou todos os contatos de forma automática.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-end gap-4">
-            <div className="flex-1">
-              <Label htmlFor="syncAmount">Quantidade</Label>
-              <Input
-                id="syncAmount"
-                type="number"
-                value={syncAmount}
-                onChange={(e) => setSyncAmount(Number(e.target.value))}
-                disabled={isSyncing}
-              />
-            </div>
-            <Button onClick={() => handleManualSync(syncAmount)} disabled={isSyncing}>
-              Sincronizar
-            </Button>
-            <Button onClick={handleFullSync} disabled={isSyncing} variant="secondary">
-              Sincronizar Tudo
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-
-      {isSyncing && activeJob && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Progresso da Sincronização</CardTitle>
-            <CardDescription>
-              Status: {activeJob.status} - Página: {activeJob.last_processed_page || 0} de ~{Math.ceil((stats?.totalAvailable || 0) / 100)}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Progress value={progress} className="mb-4" />
-            <pre className="bg-gray-900 text-white p-4 rounded-md overflow-auto text-sm h-64">
-              {logs.slice(-50).join("\n")}
-            </pre>
-          </CardContent>
-        </Card>
-      )}
+      <Card>
+        <CardHeader>
+          <CardTitle>Histórico de Sincronizações</CardTitle>
+          <CardDescription>Registros das últimas sincronizações automáticas.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Início</TableHead>
+                <TableHead>Fim</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Novos Contatos</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoadingHistory ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <TableRow key={i}>
+                    <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                    <TableCell><Skeleton className="h-6 w-24" /></TableCell>
+                    <TableCell className="text-right"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                  </TableRow>
+                ))
+              ) : syncHistory && syncHistory.length > 0 ? (
+                syncHistory.map((job) => (
+                  <TableRow key={job.id}>
+                    <TableCell>{format(new Date(job.created_at), "dd/MM/yy HH:mm:ss", { locale: ptBR })}</TableCell>
+                    <TableCell>{job.finished_at ? format(new Date(job.finished_at), "dd/MM/yy HH:mm:ss", { locale: ptBR }) : '—'}</TableCell>
+                    <TableCell>{formatStatus(job.status)}</TableCell>
+                    <TableCell className="text-right font-medium">{job.new_records_added}</TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center">Nenhuma sincronização registrada.</TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
