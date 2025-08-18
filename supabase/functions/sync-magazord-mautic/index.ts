@@ -51,36 +51,48 @@ serve(async (req) => {
     logs.push(`${timestamp()} Configurações carregadas: Intervalo de ${settings.sync_interval_minutes} min, Lote de ${settings.batch_size}.`);
 
     const magazordBaseUrl = 'https://expresso10.painel.magazord.com.br/api';
-    const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa`;
-    
-    logs.push(`${timestamp()} Conectando à API Magazord em ${contactsEndpoint}...`);
-    const contactsResponse = await fetch(contactsEndpoint, {
-      headers: { 'Authorization': authHeader },
-    });
-
-    if (!contactsResponse.ok) {
-      throw new Error(`Erro na API Magazord (Contatos): Status ${contactsResponse.status} - ${contactsResponse.statusText}`);
-    }
-    logs.push(`${timestamp()} Conexão com a API Magazord bem-sucedida.`);
-    const contactsResult = await contactsResponse.json();
-    
-    const allContacts = contactsResult.data.items;
-
-    if (!Array.isArray(allContacts)) {
-      throw new Error('A resposta da API Magazord não retornou uma lista de contatos válida.');
-    }
-    logs.push(`${timestamp()} Encontrados ${allContacts.length} contatos no total.`);
-
     const excludedDomains = new Set(settings.excluded_domains || []);
-    const filteredContacts = allContacts.filter(contact => {
-      if (!contact.email || !contact.id) return false;
-      const domain = contact.email.split('@')[1];
-      return domain && !excludedDomains.has(domain.toLowerCase());
-    });
+    const desiredCount = limit === null ? Infinity : limit;
 
-    const syncLimit = limit === null ? filteredContacts.length : (limit || settings.batch_size);
-    const contactsToProcess = filteredContacts.slice(0, syncLimit);
-    logs.push(`${timestamp()} Contatos filtrados. Processando um lote de ${contactsToProcess.length} contatos.`);
+    // --- Lógica de Paginação ---
+    let collectedFilteredContacts = [];
+    let currentPage = 1;
+    let hasMorePages = true;
+    logs.push(`${timestamp()} Iniciando coleta de contatos da API Magazord com paginação...`);
+
+    while (hasMorePages && collectedFilteredContacts.length < desiredCount) {
+      const endpoint = `${magazordBaseUrl}/v2/site/pessoa?pagina=${currentPage}`;
+      const response = await fetch(endpoint, { headers: { 'Authorization': authHeader } });
+
+      if (!response.ok) {
+        logs.push(`${timestamp()} Aviso: Falha ao buscar página ${currentPage} (Status: ${response.status}). Parando a coleta.`);
+        hasMorePages = false;
+        continue;
+      }
+
+      const result = await response.json();
+      const rawContactsFromPage = result.data?.items || [];
+
+      if (rawContactsFromPage.length === 0) {
+        hasMorePages = false;
+        logs.push(`${timestamp()} Nenhuma página adicional de contatos encontrada. Fim da coleta.`);
+        continue;
+      }
+
+      const filteredContactsFromPage = rawContactsFromPage.filter(contact => {
+        if (!contact.email || !contact.id) return false;
+        const domain = contact.email.split('@')[1];
+        return domain && !excludedDomains.has(domain.toLowerCase());
+      });
+
+      collectedFilteredContacts.push(...filteredContactsFromPage);
+      logs.push(`${timestamp()} Página ${currentPage} carregada. Contatos válidos coletados: ${collectedFilteredContacts.length}.`);
+      currentPage++;
+    }
+    // --- Fim da Lógica de Paginação ---
+
+    const contactsToProcess = collectedFilteredContacts.slice(0, desiredCount);
+    logs.push(`${timestamp()} Coleta finalizada. Processando um lote de ${contactsToProcess.length} contatos.`);
 
     let successCount = 0;
     let errorCount = 0;
@@ -103,7 +115,6 @@ serve(async (req) => {
         if (contact.sexo === 'M') tags.push('Masculino');
         else if (contact.sexo === 'F') tags.push('Feminino');
 
-        // Upsert do contato e retorna o ID do nosso banco
         const { data: dbContact, error: upsertError } = await supabaseAdmin
           .from('magazord_contacts')
           .upsert({
@@ -122,7 +133,6 @@ serve(async (req) => {
         if (upsertError) throw upsertError;
         logs.push(`${timestamp()} -> Contato ${contact.email} salvo/atualizado no DB.`);
 
-        // Busca e processa os pedidos
         const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.cpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
           headers: { 'Authorization': authHeader },
@@ -138,8 +148,7 @@ serve(async (req) => {
           
           total_compras = deliveredOrders.length;
           valor_total_gasto = deliveredOrders.reduce((sum, order) => sum + (parseFloat(order.ValorTotal) || 0), 0);
-          logs.push(`${timestamp()} -> Encontrados ${deliveredOrders.length} pedidos entregues.`);
-
+          
           if (deliveredOrders.length > 0) {
             const ordersForDb = deliveredOrders.map(order => ({
               contact_id: dbContact.id,
@@ -154,13 +163,11 @@ serve(async (req) => {
               .upsert(ordersForDb, { onConflict: 'magazord_order_id' });
             
             if (orderUpsertError) throw orderUpsertError;
-            logs.push(`${timestamp()} -> ${deliveredOrders.length} pedidos salvos no DB.`);
           }
         } else {
           logs.push(`${timestamp()} -> Aviso: Não foi possível buscar pedidos para ${contact.email} (Status: ${ordersResponse.status}).`);
         }
 
-        // Atualiza os totais no contato
         const { error: updateTotalError } = await supabaseAdmin
           .from('magazord_contacts')
           .update({
@@ -173,7 +180,6 @@ serve(async (req) => {
 
         await pushToMautic(contact);
         successCount++;
-        logs.push(`${timestamp()} -> Sucesso: Totais atualizados e enviado para Mautic (simulação).`);
         
         if (processedContactsForPreview.length < 5) {
             processedContactsForPreview.push({ ...contact, total_compras, valor_total_gasto, tags });
