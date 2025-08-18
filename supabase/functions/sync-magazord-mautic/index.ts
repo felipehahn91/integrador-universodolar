@@ -65,6 +65,10 @@ serve(async (req) => {
     }
     logs.push(`${timestamp()} Conexão com a API Magazord bem-sucedida.`);
     const contactsResult = await contactsResponse.json();
+    
+    // Adicionando log para ver a resposta completa
+    logs.push(`${timestamp()} Resposta recebida da API Magazord: ${JSON.stringify(contactsResult, null, 2)}`);
+
     const allContacts = contactsResult.registros;
 
     if (!Array.isArray(allContacts)) {
