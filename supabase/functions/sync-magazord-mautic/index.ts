@@ -45,8 +45,8 @@ serve(async (req) => {
     if (settingsError) throw settingsError;
 
     // --- 1. Busca Contatos da Magazord ---
-    const magazordBaseUrl = 'https://expresso10.painel.magazord.com.br/api';
-    const contactsEndpoint = `${magazordBaseUrl}/contatos`;
+    const magazordBaseUrl = 'https://api.magazord.com.br/v1'; // URL CORRIGIDA
+    const contactsEndpoint = `${magazordBaseUrl}/pessoa`; // ENDPOINT CORRIGIDO
     
     console.log('Buscando contatos da Magazord...');
     const contactsResponse = await fetch(contactsEndpoint, {
@@ -78,7 +78,7 @@ serve(async (req) => {
     for (const contact of contactsToProcess) {
       try {
         // --- 3. Enriquece Contato com Dados de Pedidos ---
-        const ordersEndpoint = `${magazordBaseUrl}/pedidos?CpfCnpj=${contact.CpfCnpj}`;
+        const ordersEndpoint = `${magazordBaseUrl}/pedido?CpfCnpj=${contact.CpfCnpj}`; // ENDPOINT CORRIGIDO
         const ordersResponse = await fetch(ordersEndpoint, {
           headers: { 'token': magazordApiToken, 'secret': magazordApiSecret },
         });
@@ -107,11 +107,9 @@ serve(async (req) => {
         else if (contact.Sexo === 'F') contact.tags.push('Feminino');
 
         // --- 5. Envia para o Mautic (SIMULAÇÃO) ---
-        // A função pushToMautic agora está em modo de simulação e não envia dados reais.
         await pushToMautic(contact);
         successCount++;
         
-        // Adiciona os primeiros 5 contatos processados ao array de visualização
         if (processedContactsForPreview.length < 5) {
             processedContactsForPreview.push(contact);
         }
@@ -126,7 +124,7 @@ serve(async (req) => {
     console.log(message);
 
     return new Response(
-      JSON.stringify({ message, processedContacts: processedContactsForPreview }), // Retorna os contatos para o frontend
+      JSON.stringify({ message, processedContacts: processedContactsForPreview }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     )
   } catch (error) {
