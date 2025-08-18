@@ -22,6 +22,7 @@ serve(async (req) => {
   const timestamp = () => `[${new Date().toLocaleTimeString()}]`;
 
   try {
+    const { limit = null } = await req.json().catch(() => ({ limit: null }));
     logs.push(`${timestamp()} Iniciando função de sincronização...`);
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -77,7 +78,8 @@ serve(async (req) => {
       return domain && !excludedDomains.has(domain.toLowerCase());
     });
 
-    const contactsToProcess = filteredContacts.slice(0, settings.batch_size);
+    const syncLimit = limit === null ? filteredContacts.length : (limit || settings.batch_size);
+    const contactsToProcess = filteredContacts.slice(0, syncLimit);
     logs.push(`${timestamp()} Contatos filtrados. Processando um lote de ${contactsToProcess.length} contatos.`);
 
     let successCount = 0;
