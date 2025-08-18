@@ -6,29 +6,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const timestamp = () => `[${new Date().toLocaleTimeString()}]`;
+const BATCH_SIZE = 10; // Processa 10 páginas por execução para evitar timeouts
 
-async function updateJobProgress(
-  supabase: SupabaseClient, 
-  jobId: string, 
-  newLogs: string[], 
-  processed: number, 
-  total: number,
-  lastPage: number,
-  status: 'running' | 'completed' | 'failed' = 'running'
-) {
-  const { error } = await supabase
-    .from('sync_jobs')
-    .update({ 
-      logs: newLogs,
-      processed_count: processed,
-      total_count: total,
-      last_processed_page: lastPage,
-      status: status
-    })
-    .eq('id', jobId);
-  if (error) console.error(`Failed to update job progress for ${jobId}:`, error);
-}
+const timestamp = () => `[${new Date().toLocaleTimeString()}]`;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -36,9 +16,6 @@ serve(async (req) => {
   }
 
   let jobId = '';
-  // Each run starts with a fresh log array.
-  const logs: string[] = [];
-
   const supabaseAdmin = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -46,20 +23,27 @@ serve(async (req) => {
 
   try {
     const { limit = null, jobId: receivedJobId } = await req.json();
-    if (!receivedJobId) throw new Error("jobId is required to run a sync.");
+    if (!receivedJobId) throw new Error("jobId é obrigatório para rodar a sincronização.");
     jobId = receivedJobId;
 
     const { data: jobData, error: jobFetchError } = await supabaseAdmin
       .from('sync_jobs')
-      .select('last_processed_page') // We no longer need to fetch old logs
+      .select('last_processed_page, logs, full_sync')
       .eq('id', jobId)
       .single();
 
     if (jobFetchError) throw jobFetchError;
 
-    logs.push(`${timestamp()} Job ${jobId} iniciado/continuado.`);
-    
-    await supabaseAdmin.from('sync_jobs').update({ status: 'running', logs: logs }).eq('id', jobId);
+    // Se um trabalho já está rodando, saia para evitar execuções paralelas. O scheduler tentará novamente.
+    const { data: runningCheck } = await supabaseAdmin.from('sync_jobs').select('status').eq('id', jobId).single();
+    if (runningCheck?.status === 'running') {
+      console.warn(`Trabalho ${jobId} já está em execução. Pulando esta invocação.`);
+      return new Response(JSON.stringify({ success: true, message: "Job already running." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    const logs = jobData.logs || [];
+    logs.push(`${timestamp()} Lote iniciado para o Job ${jobId}.`);
+    await supabaseAdmin.from('sync_jobs').update({ status: 'running', logs }).eq('id', jobId);
     
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
@@ -73,78 +57,67 @@ serve(async (req) => {
     const excludedDomains = new Set(settings.excluded_domains || []);
     
     let currentPage = (jobData.last_processed_page || 0) + 1;
-    let hasMorePages = true;
+    let pagesProcessedInBatch = 0;
     let totalAvailable = 0;
-    let totalProcessedInThisRun = 0;
-    let totalFailuresInThisRun = 0;
 
-    logs.push(`${timestamp()} Iniciando da página ${currentPage}.`);
-    await updateJobProgress(supabaseAdmin, jobId, logs, 0, 0, currentPage - 1);
-
-    while (hasMorePages) {
+    while (pagesProcessedInBatch < BATCH_SIZE) {
       const endpoint = `${magazordBaseUrl}/v2/site/pessoa?page=${currentPage}&orderBy=id&orderDirection=asc&limit=100`;
       const response = await fetch(endpoint, { headers: { 'Authorization': authHeader } });
-      if (!response.ok) {
-        logs.push(`${timestamp()} Aviso: Falha ao buscar página ${currentPage}. A API pode estar instável. Parando para tentar novamente mais tarde.`);
-        throw new Error(`API request failed with status ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`Falha na API da Magazord na página ${currentPage} com status ${response.status}`);
+      
       const result = await response.json();
       const rawContacts = result.data?.items || [];
-
-      if (currentPage === 1) {
-        totalAvailable = result.data?.total || 0;
-        logs.push(`${timestamp()} API reporta ${totalAvailable} contatos disponíveis.`);
-      }
+      totalAvailable = result.data?.total || totalAvailable;
 
       if (rawContacts.length === 0) {
-        hasMorePages = false;
-        continue;
+        logs.push(`${timestamp()} Fim de todos os contatos. Sincronização concluída.`);
+        await supabaseAdmin.from('sync_jobs').update({ status: 'completed', logs, finished_at: new Date().toISOString(), total_count: totalAvailable }).eq('id', jobId);
+        return new Response(JSON.stringify({ success: true, message: "Job completed." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 
       logs.push(`${timestamp()} Processando página ${currentPage} com ${rawContacts.length} contatos.`);
-
+      
       for (const contact of rawContacts) {
         const domain = contact.email?.split('@')[1];
         if (!contact.id || !contact.email || (domain && excludedDomains.has(domain.toLowerCase()))) continue;
-        try {
-          const magazordContactId = String(contact.id);
-          const { data: existingContact } = await supabaseAdmin.from('magazord_contacts').select('id').eq('magazord_id', magazordContactId).single();
-          if (existingContact) {
-            await supabaseAdmin.from('magazord_contacts').update({ last_processed_at: new Date().toISOString() }).eq('id', existingContact.id);
-            continue;
-          }
+        
+        const magazordContactId = String(contact.id);
+        const { data: existingContact } = await supabaseAdmin.from('magazord_contacts').select('id').eq('magazord_id', magazordContactId).single();
+        
+        if (existingContact) {
+          await supabaseAdmin.from('magazord_contacts').update({ last_processed_at: new Date().toISOString() }).eq('id', existingContact.id);
+        } else {
           const contactData = { nome: contact.nome, email: contact.email, cpf_cnpj: contact.cpfCnpj, tipo_pessoa: contact.tipo === 1 ? 'F' : (contact.tipo === 2 ? 'J' : null), sexo: contact.sexo, last_processed_at: new Date().toISOString() };
-          const { error: insertError } = await supabaseAdmin.from('magazord_contacts').insert({ ...contactData, magazord_id: magazordContactId });
-          if (insertError) throw insertError;
-          totalProcessedInThisRun++;
-        } catch (e) {
-          totalFailuresInThisRun++;
-          logs.push(`${timestamp()} ERRO ao processar ${contact.email}: ${e.message}`);
+          await supabaseAdmin.from('magazord_contacts').insert({ ...contactData, magazord_id: magazordContactId });
         }
       }
 
-      logs.push(`${timestamp()} Fim da página ${currentPage}. Novos contatos salvos nesta execução: ${totalProcessedInThisRun}.`);
-      await updateJobProgress(supabaseAdmin, jobId, logs, totalProcessedInThisRun, totalAvailable, currentPage);
+      await supabaseAdmin.from('sync_jobs').update({ last_processed_page: currentPage, total_count: totalAvailable, logs }).eq('id', jobId);
+      
+      pagesProcessedInBatch++;
       currentPage++;
 
-      if (limit && totalProcessedInThisRun >= limit) {
-        logs.push(`${timestamp()} Limite de ${limit} contatos atingido. Finalizando.`);
-        hasMorePages = false;
+      // Se for uma sincronização manual (com limite), respeite o limite.
+      if (!jobData.full_sync && limit && pagesProcessedInBatch * 100 >= limit) {
+        logs.push(`${timestamp()} Limite manual de ${limit} contatos atingido.`);
+        await supabaseAdmin.from('sync_jobs').update({ status: 'completed', logs, finished_at: new Date().toISOString() }).eq('id', jobId);
+        return new Response(JSON.stringify({ success: true, message: "Job completed." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
 
-    const finalMessage = `Sincronização concluída. Novos contatos salvos: ${totalProcessedInThisRun}. Falhas: ${totalFailuresInThisRun}.`;
-    logs.push(`${timestamp()} ${finalMessage}`);
-    await supabaseAdmin.from('sync_jobs').update({ status: 'completed', logs, finished_at: new Date().toISOString() }).eq('id', jobId);
+    logs.push(`${timestamp()} Fim do lote. O scheduler continuará o trabalho.`);
+    await supabaseAdmin.from('sync_jobs').update({ status: 'pending', logs }).eq('id', jobId); // Volta para 'pending' para o scheduler pegar de novo
 
-    return new Response(JSON.stringify({ success: true, message: "Job completed." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: true, message: "Batch completed." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    const errorMessage = `Erro na função: ${error.message}. O trabalho foi pausado e pode ser continuado.`;
+    const { data: jobData } = await supabaseAdmin.from('sync_jobs').select('logs').eq('id', jobId).single();
+    const logs = jobData?.logs || [];
+    const errorMessage = `Erro no lote: ${error.message}. O scheduler tentará novamente em breve.`;
     logs.push(`${timestamp()} ${errorMessage}`);
     if (jobId) {
       await supabaseAdmin.from('sync_jobs').update({ status: 'failed', logs }).eq('id', jobId);
     }
-    return new Response(JSON.stringify({ success: false, error: { message: errorMessage }, logs }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: false, error: { message: errorMessage } }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 })

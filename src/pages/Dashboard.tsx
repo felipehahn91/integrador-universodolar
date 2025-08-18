@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -40,27 +40,17 @@ const fetchSyncStats = async () => {
   return data.data;
 };
 
-const fetchJobStatus = async (jobId: string) => {
+const fetchActiveJob = async () => {
   const { data, error } = await supabase
     .from('sync_jobs')
     .select('*')
-    .eq('id', jobId)
-    .single();
-  if (error) throw new Error(error.message);
-  return data;
-}
-
-const fetchLastIncompleteJob = async () => {
-  const { data, error } = await supabase
-    .from('sync_jobs')
-    .select('id, status, updated_at')
-    .in('status', ['running', 'failed'])
+    .neq('status', 'completed')
     .order('created_at', { ascending: false })
     .limit(1)
     .single();
   
   if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
-    console.error("Error fetching last incomplete job:", error);
+    console.error("Error fetching active job:", error);
   }
   return data;
 }
@@ -70,33 +60,6 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const [syncAmount, setSyncAmount] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
-
-  useQuery({
-    queryKey: ['last_incomplete_job'],
-    queryFn: fetchLastIncompleteJob,
-    onSuccess: async (data) => {
-      if (data && !activeJobId) {
-        // Detect stale 'running' jobs
-        if (data.status === 'running' && data.updated_at) {
-          const lastUpdated = new Date(data.updated_at).getTime();
-          const now = new Date().getTime();
-          const fiveMinutes = 5 * 60 * 1000;
-          if (now - lastUpdated > fiveMinutes) {
-            // Job is stale, mark it as failed so the user can continue
-            await supabase
-              .from('sync_jobs')
-              .update({ status: 'failed' })
-              .eq('id', data.id);
-            // Invalidate to refetch and show the 'Continue' button
-            queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
-            return;
-          }
-        }
-        setActiveJobId(data.id);
-      }
-    }
-  });
 
   const { data: contactsData, isLoading: isLoadingContacts } = useQuery({
     queryKey: ["magazord_contacts", currentPage],
@@ -113,85 +76,85 @@ const Dashboard = () => {
     queryFn: fetchSyncStats,
   });
 
-  const { data: jobStatus } = useQuery({
-    queryKey: ['job_status', activeJobId],
-    queryFn: () => fetchJobStatus(activeJobId!),
-    enabled: !!activeJobId,
+  const { data: activeJob, refetch: refetchActiveJob } = useQuery({
+    queryKey: ['active_job'],
+    queryFn: fetchActiveJob,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === 'running' || status === 'pending' ? 2000 : false;
+      return status === 'running' || status === 'pending' ? 5000 : false;
     },
     onSuccess: (data) => {
-      if (data.status === 'completed') {
-        setActiveJobId(null);
+      if (data?.status === 'completed') {
         queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
         queryClient.invalidateQueries({ queryKey: ["sync_stats"] });
-        queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
         showSuccess("Sincronização concluída com sucesso!");
-      } else if (data.status === 'failed') {
-        queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
-        showError("A sincronização foi interrompida. Você pode continuá-la.");
+        // Invalidate a query para limpar o job ativo da tela
+        queryClient.invalidateQueries({ queryKey: ['active_job'] });
       }
     }
   });
 
-  const handleSync = async (limit: number | null) => {
+  const handleManualSync = async (limit: number) => {
+    if (activeJob) {
+      showError("Uma sincronização já está em andamento. Aguarde a conclusão.");
+      return;
+    }
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       showError("Você precisa estar logado para iniciar uma sincronização.");
       return;
     }
 
-    let jobIdToUse = activeJobId;
+    const { data: newJob, error: createJobError } = await supabase
+      .from('sync_jobs')
+      .insert({ user_id: user.id, status: 'pending', full_sync: false })
+      .select('id')
+      .single();
 
-    if (jobStatus && jobStatus.status !== 'failed') {
-      showError("Uma sincronização já está em andamento.");
+    if (createJobError || !newJob) {
+      showError("Não foi possível iniciar o trabalho de sincronização.");
+      return;
+    }
+    
+    refetchActiveJob(); // Mostra o progresso imediatamente
+
+    const { error } = await supabase.functions.invoke("sync-magazord-mautic", {
+      body: { limit, jobId: newJob.id },
+    });
+
+    if (error) {
+      showError("Falha ao iniciar a sincronização manual.");
+      console.error(error);
+    }
+  };
+
+  const handleFullSync = async () => {
+    if (activeJob) {
+      showError("Uma sincronização já está em andamento. Aguarde a conclusão.");
+      return;
+    }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      showError("Você precisa estar logado para iniciar uma sincronização.");
       return;
     }
 
-    if (!jobIdToUse || (jobStatus && jobStatus.status !== 'failed')) {
-      const { data: newJob, error: createJobError } = await supabase
-        .from('sync_jobs')
-        .insert({ user_id: user.id, status: 'pending' })
-        .select('id')
-        .single();
+    const { error } = await supabase
+      .from('sync_jobs')
+      .insert({ user_id: user.id, status: 'pending', full_sync: true, last_processed_page: 0 });
 
-      if (createJobError || !newJob) {
-        showError("Não foi possível iniciar o trabalho de sincronização.");
-        return;
-      }
-      jobIdToUse = newJob.id;
-      setActiveJobId(jobIdToUse);
+    if (error) {
+      showError("Não foi possível agendar a sincronização completa.");
+    } else {
+      showSuccess("Sincronização completa agendada! O processo começará em breve e continuará automaticamente.");
+      refetchActiveJob();
     }
-    
-    supabase.functions.invoke("sync-magazord-mautic", {
-      body: { limit, jobId: jobIdToUse },
-    }).then(async ({ error }) => {
-      if (error) {
-        console.error("Function invocation failed:", error);
-        const timestamp = `[${new Date().toLocaleTimeString()}]`;
-        const logMessage = `${timestamp} ERRO CRÍTICO: A chamada para a função de sincronização falhou. Isso pode ser um timeout ou um problema de rede. Tente continuar a sincronização.`;
-        
-        await supabase
-          .from('sync_jobs')
-          .update({ 
-            status: 'failed', 
-            logs: [logMessage],
-            finished_at: new Date().toISOString()
-          })
-          .eq('id', jobIdToUse);
-
-        queryClient.invalidateQueries({ queryKey: ['job_status', jobIdToUse] });
-        queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
-      }
-    });
   };
   
-  const isSyncing = jobStatus?.status === 'running' || jobStatus?.status === 'pending';
-  const hasFailedJob = jobStatus?.status === 'failed';
-  const logs = jobStatus?.logs || [];
-  const progress = jobStatus && jobStatus.total_count > 0 
-    ? (jobStatus.processed_count / jobStatus.total_count) * 100 
+  const isSyncing = activeJob && activeJob.status !== 'completed';
+  const logs = activeJob?.logs || [];
+  const progress = activeJob && activeJob.total_count > 0 
+    ? ((activeJob.last_processed_page * 100) / activeJob.total_count) * 100
     : 0;
 
   return (
@@ -220,7 +183,7 @@ const Dashboard = () => {
           <CardHeader>
             <CardTitle>Sincronização Manual</CardTitle>
             <CardDescription>
-              {hasFailedJob ? "Uma sincronização foi interrompida. Continue de onde parou." : "Escolha quantos contatos deseja sincronizar."}
+              Sincronize uma quantidade específica ou todos os contatos de forma automática.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex items-end gap-4">
@@ -231,31 +194,31 @@ const Dashboard = () => {
                 type="number"
                 value={syncAmount}
                 onChange={(e) => setSyncAmount(Number(e.target.value))}
-                disabled={isSyncing}
+                disabled={!!isSyncing}
               />
             </div>
-            <Button onClick={() => handleSync(syncAmount)} disabled={isSyncing}>
-              {isSyncing ? "Sincronizando..." : (hasFailedJob ? "Continuar" : "Sincronizar")}
+            <Button onClick={() => handleManualSync(syncAmount)} disabled={!!isSyncing}>
+              Sincronizar
             </Button>
-            <Button onClick={() => handleSync(null)} disabled={isSyncing} variant="secondary">
-              {isSyncing ? "Sincronizando..." : (hasFailedJob ? "Continuar Tudo" : "Sincronizar Tudo")}
+            <Button onClick={handleFullSync} disabled={!!isSyncing} variant="secondary">
+              Sincronizar Tudo
             </Button>
           </CardContent>
         </Card>
       </div>
 
-      {activeJobId && jobStatus && (
+      {isSyncing && activeJob && (
         <Card>
           <CardHeader>
             <CardTitle>Progresso da Sincronização</CardTitle>
             <CardDescription>
-              Status: {jobStatus.status} ({jobStatus.processed_count} / {jobStatus.total_count}) - Página: {jobStatus.last_processed_page}
+              Status: {activeJob.status} - Página: {activeJob.last_processed_page || 0} de ~{Math.ceil((stats?.totalAvailable || 0) / 100)}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Progress value={progress} className="mb-4" />
             <pre className="bg-gray-900 text-white p-4 rounded-md overflow-auto text-sm h-64">
-              {logs.join("\n")}
+              {logs.slice(-50).join("\n")}
             </pre>
           </CardContent>
         </Card>
