@@ -65,7 +65,7 @@ serve(async (req) => {
     while (hasMorePages && collectedContactsMap.size < desiredCount) {
       const mapSizeBeforePage = collectedContactsMap.size;
       
-      const endpoint = `${magazordBaseUrl}/v2/site/pessoa?pagina=${currentPage}&orderBy=id&orderDirection=asc&limit=100`;
+      const endpoint = `${magazordBaseUrl}/v2/site/pessoa?page=${currentPage}&orderBy=id&orderDirection=asc&limit=100`;
       const response = await fetch(endpoint, { headers: { 'Authorization': authHeader } });
 
       if (!response.ok) {
