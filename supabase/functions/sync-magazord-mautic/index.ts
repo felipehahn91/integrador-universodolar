@@ -37,6 +37,11 @@ serve(async (req) => {
       throw new Error('As credenciais da API Magazord não foram configuradas nos segredos.');
     }
 
+    // --- Cria o Header de Autenticação Basic Auth ---
+    const authString = `${magazordApiToken}:${magazordApiSecret}`;
+    const authHeader = `Basic ${btoa(authString)}`;
+    logs.push(`${timestamp()} Header de autenticação Basic Auth criado.`);
+
     const { data: settings, error: settingsError } = await supabaseAdmin
       .from('settings')
       .select('*')
@@ -52,7 +57,7 @@ serve(async (req) => {
     
     logs.push(`${timestamp()} Conectando à API Magazord em ${contactsEndpoint}...`);
     const contactsResponse = await fetch(contactsEndpoint, {
-      headers: { 'token': magazordApiToken, 'secret': magazordApiSecret },
+      headers: { 'Authorization': authHeader },
     });
 
     if (!contactsResponse.ok) {
@@ -88,7 +93,7 @@ serve(async (req) => {
         // --- 3. Enriquece Contato com Dados de Pedidos ---
         const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.CpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
-          headers: { 'token': magazordApiToken, 'secret': magazordApiSecret },
+          headers: { 'Authorization': authHeader },
         });
 
         let total_compras = 0;
