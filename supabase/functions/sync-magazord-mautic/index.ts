@@ -16,6 +16,7 @@ serve(async (req) => {
   }
 
   let jobId = '';
+  let logs: string[] = [];
   const supabaseAdmin = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -28,21 +29,20 @@ serve(async (req) => {
 
     const { data: jobData, error: jobFetchError } = await supabaseAdmin
       .from('sync_jobs')
-      .select('last_processed_page, logs, full_sync')
+      .select('last_processed_page, full_sync')
       .eq('id', jobId)
       .single();
 
     if (jobFetchError) throw jobFetchError;
 
-    // Se um trabalho já está rodando, saia para evitar execuções paralelas. O scheduler tentará novamente.
     const { data: runningCheck } = await supabaseAdmin.from('sync_jobs').select('status').eq('id', jobId).single();
     if (runningCheck?.status === 'running') {
       console.warn(`Trabalho ${jobId} já está em execução. Pulando esta invocação.`);
       return new Response(JSON.stringify({ success: true, message: "Job already running." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    const logs = jobData.logs || [];
-    logs.push(`${timestamp()} Lote iniciado para o Job ${jobId}.`);
+    // Começa com um log limpo para esta execução
+    logs = [`${timestamp()} Lote iniciado para o Job ${jobId}.`];
     await supabaseAdmin.from('sync_jobs').update({ status: 'running', logs }).eq('id', jobId);
     
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
@@ -97,7 +97,6 @@ serve(async (req) => {
       pagesProcessedInBatch++;
       currentPage++;
 
-      // Se for uma sincronização manual (com limite), respeite o limite.
       if (!jobData.full_sync && limit && pagesProcessedInBatch * 100 >= limit) {
         logs.push(`${timestamp()} Limite manual de ${limit} contatos atingido.`);
         await supabaseAdmin.from('sync_jobs').update({ status: 'completed', logs, finished_at: new Date().toISOString() }).eq('id', jobId);
@@ -106,14 +105,12 @@ serve(async (req) => {
     }
 
     logs.push(`${timestamp()} Fim do lote. O scheduler continuará o trabalho.`);
-    await supabaseAdmin.from('sync_jobs').update({ status: 'pending', logs }).eq('id', jobId); // Volta para 'pending' para o scheduler pegar de novo
+    await supabaseAdmin.from('sync_jobs').update({ status: 'pending', logs }).eq('id', jobId);
 
     return new Response(JSON.stringify({ success: true, message: "Batch completed." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    const { data: jobData } = await supabaseAdmin.from('sync_jobs').select('logs').eq('id', jobId).single();
-    const logs = jobData?.logs || [];
-    const errorMessage = `Erro no lote: ${error.message}. O scheduler tentará novamente em breve.`;
+    const errorMessage = `ERRO CRÍTICO: ${error.message}. O scheduler tentará novamente em breve.`;
     logs.push(`${timestamp()} ${errorMessage}`);
     if (jobId) {
       await supabaseAdmin.from('sync_jobs').update({ status: 'failed', logs }).eq('id', jobId);

@@ -81,15 +81,16 @@ const Dashboard = () => {
     queryFn: fetchActiveJob,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === 'running' || status === 'pending' ? 5000 : false;
+      // Continua atualizando enquanto o job não estiver concluído
+      return (status && status !== 'completed') ? 5000 : false;
     },
     onSuccess: (data) => {
       if (data?.status === 'completed') {
         queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
         queryClient.invalidateQueries({ queryKey: ["sync_stats"] });
         showSuccess("Sincronização concluída com sucesso!");
-        // Invalidate a query para limpar o job ativo da tela
-        queryClient.invalidateQueries({ queryKey: ['active_job'] });
+        // Apenas refaz a busca do job, que agora retornará nulo, limpando a tela.
+        refetchActiveJob();
       }
     }
   });
