@@ -5,35 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useNavigate } from "react-router-dom";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
 import { Button } from "@/components/ui/button";
-import { Clock, RefreshCw } from "lucide-react";
+import { Clock, RefreshCw, Users as UsersIcon } from "lucide-react";
 import { showSuccess, showError, showLoading } from "@/utils/toast";
-import { Toaster, toast } from "sonner";
-
-
-const PAGE_SIZE = 15;
-
-const fetchContacts = async (page: number) => {
-  const from = (page - 1) * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
-  const { data, error, count } = await supabase
-    .from("magazord_contacts")
-    .select("*", { count: 'exact' })
-    .order("created_at", { ascending: false })
-    .range(from, to);
-  if (error) throw new Error(error.message);
-  return { contacts: data, count };
-};
+import { toast } from "sonner";
 
 const fetchSyncHistory = async () => {
   const { data, error } = await supabase
@@ -55,21 +32,17 @@ const fetchSettings = async () => {
   return data;
 }
 
+const fetchContactStats = async () => {
+    const { count, error } = await supabase
+    .from('magazord_contacts')
+    .select('*', { count: 'exact', head: true });
+    if (error) throw new Error(error.message);
+    return { count };
+}
+
 const Dashboard = () => {
-  const navigate = useNavigate();
-  const [currentPage, setCurrentPage] = useState(1);
   const [isSyncing, setIsSyncing] = useState(false);
   const queryClient = useQueryClient();
-
-  const { data: contactsData, isLoading: isLoadingContacts } = useQuery({
-    queryKey: ["magazord_contacts", currentPage],
-    queryFn: () => fetchContacts(currentPage),
-    keepPreviousData: true,
-  });
-  
-  const contacts = contactsData?.contacts;
-  const totalContacts = contactsData?.count ?? 0;
-  const totalPages = Math.ceil(totalContacts / PAGE_SIZE);
 
   const { data: syncHistory, isLoading: isLoadingHistory } = useQuery({
     queryKey: ["sync_history"],
@@ -80,6 +53,11 @@ const Dashboard = () => {
   const { data: settings, isLoading: isLoadingSettings } = useQuery({
     queryKey: ["settings"],
     queryFn: fetchSettings,
+  });
+
+  const { data: contactStats, isLoading: isLoadingContactStats } = useQuery({
+      queryKey: ["contact_stats"],
+      queryFn: fetchContactStats,
   });
 
   const handleManualSync = async () => {
@@ -95,6 +73,7 @@ const Dashboard = () => {
     } else {
       showSuccess("Sincronização iniciada. A tabela será atualizada em breve.");
       queryClient.invalidateQueries({ queryKey: ['sync_history'] });
+      queryClient.invalidateQueries({ queryKey: ['contact_stats'] });
     }
     
     setIsSyncing(false);
@@ -109,9 +88,45 @@ const Dashboard = () => {
     }
   };
 
+  const lastSync = syncHistory?.[0];
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total de Contatos</CardTitle>
+            <UsersIcon className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            {isLoadingContactStats ? (
+              <Skeleton className="h-8 w-1/2" />
+            ) : (
+              <div className="text-2xl font-bold">{contactStats?.count}</div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Total de contatos importados da Magazord.
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Última Sincronização</CardTitle>
+            <RefreshCw className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+             {isLoadingHistory ? (
+              <Skeleton className="h-8 w-3/4" />
+            ) : (
+              <div className="text-2xl font-bold">
+                {lastSync ? formatDistanceToNow(new Date(lastSync.created_at), { locale: ptBR, addSuffix: true }) : "Nenhuma"}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {lastSync ? `Status: ${lastSync.status}` : "Execute uma sincronização."}
+            </p>
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Sincronização Automática</CardTitle>
@@ -179,79 +194,6 @@ const Dashboard = () => {
               )}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Contatos Sincronizados</CardTitle>
-          <CardDescription>Lista dos últimos contatos sincronizados.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Nome</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Tipo</TableHead>
-                <TableHead className="text-right">Total Gasto</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoadingContacts ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell><Skeleton className="h-4 w-40" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-52" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-20" /></TableCell>
-                    <TableCell className="text-right"><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
-                  </TableRow>
-                ))
-              ) : (
-                contacts?.map((contact) => (
-                  <TableRow 
-                    key={contact.id} 
-                    onClick={() => navigate(`/contact/${contact.id}`)}
-                    className="cursor-pointer hover:bg-muted/50"
-                  >
-                    <TableCell>{contact.nome}</TableCell>
-                    <TableCell>{contact.email}</TableCell>
-                    <TableCell>
-                      <Badge variant={contact.tipo_pessoa === 'F' ? 'outline' : 'secondary'}>
-                        {contact.tipo_pessoa === 'F' ? 'P. Física' : 'P. Jurídica'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {Number(contact.valor_total_gasto).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-          {totalPages > 1 && (
-            <Pagination className="mt-4">
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    href="#"
-                    onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.max(p - 1, 1)); }}
-                    className={currentPage === 1 ? "pointer-events-none opacity-50" : "" }
-                  />
-                </PaginationItem>
-                <PaginationItem className="text-sm text-muted-foreground">
-                  Página {currentPage} de {totalPages}
-                </PaginationItem>
-                <PaginationItem>
-                  <PaginationNext
-                    href="#"
-                    onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.min(p + 1, totalPages)); }}
-                    className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          )}
         </CardContent>
       </Card>
     </div>

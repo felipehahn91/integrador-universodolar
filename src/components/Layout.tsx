@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { PanelLeft, Settings, LayoutDashboard, LogOut, Users } from "lucide-react";
+import { PanelLeft, Settings, LayoutDashboard, LogOut, Users, Contact } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { MadeWithDyad } from "./made-with-dyad";
 
@@ -15,6 +15,7 @@ const Layout = () => {
 
   const navItems = [
     { to: "/", icon: <LayoutDashboard className="h-5 w-5" />, label: "Dashboard" },
+    { to: "/contacts", icon: <Contact className="h-5 w-5" />, label: "Contatos" },
     { to: "/users", icon: <Users className="h-5 w-5" />, label: "Usuários" },
     { to: "/settings", icon: <Settings className="h-5 w-5" />, label: "Configurações" },
   ];
@@ -31,6 +32,7 @@ const Layout = () => {
               className={({ isActive }) =>
                 `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-primary ${isActive ? "bg-muted text-primary" : ""}`
               }
+              end={item.to === "/"}
             >
               {item.icon}
               {item.label}
@@ -63,6 +65,7 @@ const Layout = () => {
                     className={({ isActive }) =>
                       `flex items-center gap-4 px-2.5 text-muted-foreground hover:text-foreground ${isActive ? "text-foreground" : ""}`
                     }
+                    end={item.to === "/"}
                   >
                     {item.icon}
                     {item.label}

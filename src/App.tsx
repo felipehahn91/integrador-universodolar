@@ -14,6 +14,7 @@ import Settings from "./pages/Settings";
 import Users from "./pages/Users";
 import NotFound from "./pages/NotFound";
 import ContactDetails from "./pages/ContactDetails";
+import Contacts from "./pages/Contacts"; // Importa a nova página
 
 const queryClient = new QueryClient();
 
@@ -39,7 +40,7 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   if (loading) {
-    return <div>Carregando...</div>; // Or a proper spinner component
+    return <div className="flex h-screen items-center justify-center">Carregando...</div>;
   }
 
   return (
@@ -70,6 +71,7 @@ const App = () => (
             <Route element={<ProtectedRoute />}>
               <Route element={<Layout />}>
                 <Route path="/" element={<Dashboard />} />
+                <Route path="/contacts" element={<Contacts />} />
                 <Route path="/contact/:contactId" element={<ContactDetails />} />
                 <Route path="/users" element={<Users />} />
                 <Route path="/settings" element={<Settings />} />
