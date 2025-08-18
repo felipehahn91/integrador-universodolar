@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -101,20 +101,42 @@ const Dashboard = () => {
       return;
     }
 
-    try {
-      const { data, error } = await supabase.functions.invoke("sync-magazord-mautic", {
-        body: { limit, user_id: user.id },
-      });
+    // 1. Create the job record to get an ID immediately
+    const { data: newJob, error: createJobError } = await supabase
+      .from('sync_jobs')
+      .insert({ user_id: user.id, status: 'pending' })
+      .select('id')
+      .single();
 
-      if (error) throw error;
-      if (data.jobId) {
-        setActiveJobId(data.jobId);
-      } else {
-        throw new Error("A função não retornou um ID de trabalho.");
-      }
-    } catch (err: any) {
-      showError(err.message || "Falha ao iniciar a sincronização.");
+    if (createJobError || !newJob) {
+      showError("Não foi possível iniciar o trabalho de sincronização.");
+      console.error(createJobError);
+      return;
     }
+
+    const jobId = newJob.id;
+    setActiveJobId(jobId); // 2. Update UI immediately
+
+    // 3. Invoke the function in the background.
+    // We don't need to wait for its response because the polling mechanism handles UI updates.
+    supabase.functions.invoke("sync-magazord-mautic", {
+      body: { limit, jobId },
+    }).then(({ error }) => {
+      if (error) {
+        // If the function invocation itself fails, update the job status to 'failed'.
+        console.error("Function invocation failed:", error);
+        showError(`Falha ao chamar a função de sincronização: ${error.message}`);
+        supabase
+          .from('sync_jobs')
+          .update({ 
+            status: 'failed', 
+            logs: ['Erro: A chamada para a função de sincronização falhou.'],
+            finished_at: new Date().toISOString()
+          })
+          .eq('id', jobId)
+          .then();
+      }
+    });
   };
   
   const isSyncing = !!activeJobId;

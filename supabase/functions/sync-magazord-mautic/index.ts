@@ -36,23 +36,20 @@ serve(async (req) => {
   const logs: string[] = [];
 
   try {
-    const { limit = null, user_id } = await req.json();
-    if (!user_id) throw new Error("user_id is required to start a sync job.");
+    const { limit = null, jobId: receivedJobId } = await req.json();
+    if (!receivedJobId) throw new Error("jobId is required to run a sync.");
+    jobId = receivedJobId;
 
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // 1. Create a new job record
-    const { data: job, error: jobError } = await supabaseAdmin
+    // 1. Update the job status to 'running'
+    await supabaseAdmin
       .from('sync_jobs')
-      .insert({ user_id: user_id, status: 'running' })
-      .select('id')
-      .single();
-
-    if (jobError) throw jobError;
-    jobId = job.id;
+      .update({ status: 'running' })
+      .eq('id', jobId);
 
     logs.push(`${timestamp()} Job ${jobId} iniciado.`);
     
@@ -119,10 +116,7 @@ serve(async (req) => {
     for (const [index, contact] of contactsToProcess.entries()) {
       try {
         const magazordContactId = String(contact.id);
-        // ... (toda a lógica de upsert de contato e pedido continua aqui, como antes)
-        // ... (para brevidade, o código interno do loop foi omitido, mas ele permanece o mesmo)
         
-        // Simulate processing
         const { data: existingContact } = await supabaseAdmin.from('magazord_contacts').select('id').eq('magazord_id', magazordContactId).single();
         if (existingContact) {
            await supabaseAdmin.from('magazord_contacts').update({ last_processed_at: new Date().toISOString() }).eq('magazord_id', magazordContactId);
@@ -144,13 +138,12 @@ serve(async (req) => {
     logs.push(`${timestamp()} ${finalMessage}`);
     await supabaseAdmin.from('sync_jobs').update({ status: 'completed', logs, finished_at: new Date().toISOString() }).eq('id', jobId);
 
-    return new Response(JSON.stringify({ success: true, jobId }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: true, message: "Job completed." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
     const errorMessage = `Erro fatal na função: ${error.message}`;
     logs.push(`${timestamp()} ${errorMessage}`);
     if (jobId) {
-      const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
       const supabaseAdmin = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
       await supabaseAdmin.from('sync_jobs').update({ status: 'failed', logs, finished_at: new Date().toISOString() }).eq('id', jobId);
     }
