@@ -76,6 +76,11 @@ serve(async (req) => {
 
       const result = await response.json();
       const rawContactsFromPage = result.data?.items || [];
+      const totalReportedByApi = result.data?.total || 'N/A';
+
+      if (currentPage === 1) {
+        logs.push(`${timestamp()} API reporta um total de ${totalReportedByApi} contatos.`);
+      }
 
       if (rawContactsFromPage.length === 0) {
         hasMorePages = false;
