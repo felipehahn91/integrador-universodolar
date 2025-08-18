@@ -40,17 +40,17 @@ const fetchSyncStats = async () => {
   return data.data;
 };
 
-const fetchActiveJob = async () => {
+// Busca o job mais recente, independentemente do status.
+const fetchLatestJob = async () => {
   const { data, error } = await supabase
     .from('sync_jobs')
     .select('*')
-    .neq('status', 'completed')
     .order('created_at', { ascending: false })
     .limit(1)
     .single();
   
   if (error && error.code !== 'PGRST116') { // PGRST116 = no rows found
-    console.error("Error fetching active job:", error);
+    console.error("Error fetching latest job:", error);
   }
   return data;
 }
@@ -76,24 +76,26 @@ const Dashboard = () => {
     queryFn: fetchSyncStats,
   });
 
-  const { data: activeJob, refetch: refetchActiveJob } = useQuery({
-    queryKey: ['active_job'],
-    queryFn: fetchActiveJob,
+  const { data: latestJob, refetch: refetchLatestJob } = useQuery({
+    queryKey: ['latest_job'],
+    queryFn: fetchLatestJob,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      // Continua atualizando enquanto o job não estiver concluído
+      // Continua atualizando enquanto o job mais recente não estiver concluído
       return (status && status !== 'completed') ? 5000 : false;
     },
     onSuccess: (data) => {
+      // Se o job mais recente for concluído, exibe a notificação e atualiza os dados.
       if (data?.status === 'completed') {
         queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
         queryClient.invalidateQueries({ queryKey: ["sync_stats"] });
         showSuccess("Sincronização concluída com sucesso!");
-        // Apenas refaz a busca do job, que agora retornará nulo, limpando a tela.
-        refetchActiveJob();
       }
     }
   });
+
+  // Um job é considerado "ativo" se ele for o mais recente E não estiver concluído.
+  const activeJob = latestJob && latestJob.status !== 'completed' ? latestJob : null;
 
   const handleManualSync = async (limit: number) => {
     if (activeJob) {
@@ -117,7 +119,7 @@ const Dashboard = () => {
       return;
     }
     
-    refetchActiveJob(); // Mostra o progresso imediatamente
+    refetchLatestJob(); // Mostra o progresso imediatamente
 
     const { error } = await supabase.functions.invoke("sync-magazord-mautic", {
       body: { limit, jobId: newJob.id },
@@ -148,11 +150,11 @@ const Dashboard = () => {
       showError("Não foi possível agendar a sincronização completa.");
     } else {
       showSuccess("Sincronização completa agendada! O processo começará em breve e continuará automaticamente.");
-      refetchActiveJob();
+      refetchLatestJob();
     }
   };
   
-  const isSyncing = activeJob && activeJob.status !== 'completed';
+  const isSyncing = !!activeJob;
   const logs = activeJob?.logs || [];
   const progress = activeJob && activeJob.total_count > 0 
     ? ((activeJob.last_processed_page * 100) / activeJob.total_count) * 100
@@ -195,13 +197,13 @@ const Dashboard = () => {
                 type="number"
                 value={syncAmount}
                 onChange={(e) => setSyncAmount(Number(e.target.value))}
-                disabled={!!isSyncing}
+                disabled={isSyncing}
               />
             </div>
-            <Button onClick={() => handleManualSync(syncAmount)} disabled={!!isSyncing}>
+            <Button onClick={() => handleManualSync(syncAmount)} disabled={isSyncing}>
               Sincronizar
             </Button>
-            <Button onClick={handleFullSync} disabled={!!isSyncing} variant="secondary">
+            <Button onClick={handleFullSync} disabled={isSyncing} variant="secondary">
               Sincronizar Tudo
             </Button>
           </CardContent>
