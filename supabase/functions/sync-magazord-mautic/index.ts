@@ -63,7 +63,7 @@ serve(async (req) => {
     logs.push(`${timestamp()} Iniciando coleta de contatos da API Magazord com paginação (ordenando pelos mais recentes)...`);
 
     while (hasMorePages && collectedContactsMap.size < desiredCount) {
-      const mapSizeBeforeFetch = collectedContactsMap.size;
+      const mapSizeBeforePage = collectedContactsMap.size;
       
       const endpoint = `${magazordBaseUrl}/v2/site/pessoa?pagina=${currentPage}&orderBy=id&orderDirection=desc`;
       const response = await fetch(endpoint, { headers: { 'Authorization': authHeader } });
@@ -95,9 +95,10 @@ serve(async (req) => {
         }
       }
 
-      logs.push(`${timestamp()} Página ${currentPage} carregada. Contatos únicos coletados: ${collectedContactsMap.size}.`);
+      const newlyAdded = collectedContactsMap.size - mapSizeBeforePage;
+      logs.push(`${timestamp()} Página ${currentPage}: ${rawContactsFromPage.length} recebidos, ${newlyAdded} novos adicionados. Total único: ${collectedContactsMap.size}.`);
 
-      if (collectedContactsMap.size === mapSizeBeforeFetch && rawContactsFromPage.length > 0) {
+      if (newlyAdded === 0 && rawContactsFromPage.length > 0) {
         pagesWithoutNewContacts++;
       } else {
         pagesWithoutNewContacts = 0; // Reset if we find new contacts or the page is empty
