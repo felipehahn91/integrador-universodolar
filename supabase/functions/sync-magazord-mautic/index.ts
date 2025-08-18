@@ -8,7 +8,7 @@ const corsHeaders = {
 
 // --- Mautic API Helper (Temporariamente desativado para simulação) ---
 async function pushToMautic(contactData: any) {
-  console.log(`[SIMULAÇÃO] Enviando para o Mautic: ${contactData.Email}`);
+  // This is just a simulation
   return { contact: { id: Math.floor(Math.random() * 1000) } };
 }
 
@@ -18,13 +18,18 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  const logs: string[] = [];
+  const timestamp = () => `[${new Date().toLocaleTimeString()}]`;
+
   try {
+    logs.push(`${timestamp()} Iniciando função de sincronização...`);
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
     
     // --- Pega Segredos e Configurações ---
+    logs.push(`${timestamp()} Buscando segredos e configurações...`);
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
 
@@ -39,22 +44,28 @@ serve(async (req) => {
       .single();
 
     if (settingsError) throw settingsError;
+    logs.push(`${timestamp()} Configurações carregadas: Intervalo de ${settings.sync_interval_minutes} min, Lote de ${settings.batch_size}.`);
 
     // --- 1. Busca Contatos da Magazord ---
-    const magazordBaseUrl = 'https://expresso10.painel.magazord.com.br/api'; // URL Base da API ATUALIZADA
+    const magazordBaseUrl = 'https://expresso10.painel.magazord.com.br/api';
     const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa`;
     
-    console.log('Buscando contatos da Magazord...');
+    logs.push(`${timestamp()} Conectando à API Magazord em ${contactsEndpoint}...`);
     const contactsResponse = await fetch(contactsEndpoint, {
       headers: { 'token': magazordApiToken, 'secret': magazordApiSecret },
     });
 
-    if (!contactsResponse.ok) throw new Error(`Erro na API Magazord (Contatos): ${contactsResponse.status}`);
+    if (!contactsResponse.ok) {
+      throw new Error(`Erro na API Magazord (Contatos): Status ${contactsResponse.status} - ${contactsResponse.statusText}`);
+    }
+    logs.push(`${timestamp()} Conexão com a API Magazord bem-sucedida.`);
     const contactsResult = await contactsResponse.json();
     const allContacts = contactsResult.registros;
 
-    if (!Array.isArray(allContacts)) throw new Error('A resposta da API Magazord não retornou uma lista de contatos.');
-    console.log(`Encontrados ${allContacts.length} contatos no total.`);
+    if (!Array.isArray(allContacts)) {
+      throw new Error('A resposta da API Magazord não retornou uma lista de contatos válida.');
+    }
+    logs.push(`${timestamp()} Encontrados ${allContacts.length} contatos no total.`);
 
     // --- 2. Filtra e Processa Contatos em Lotes ---
     const excludedDomains = new Set(settings.excluded_domains || []);
@@ -65,7 +76,7 @@ serve(async (req) => {
     });
 
     const contactsToProcess = filteredContacts.slice(0, settings.batch_size);
-    console.log(`Filtrando e processando um lote de ${contactsToProcess.length} contatos.`);
+    logs.push(`${timestamp()} Contatos filtrados. Processando um lote de ${contactsToProcess.length} contatos.`);
 
     let successCount = 0;
     let errorCount = 0;
@@ -73,6 +84,7 @@ serve(async (req) => {
 
     for (const contact of contactsToProcess) {
       try {
+        logs.push(`${timestamp()} Processando ${contact.Email} (ID: ${contact.Codigo})...`);
         // --- 3. Enriquece Contato com Dados de Pedidos ---
         const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.CpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
@@ -88,6 +100,9 @@ serve(async (req) => {
           const deliveredOrders = orders.filter(o => o.Status === 'Entregue');
           total_compras = deliveredOrders.length;
           valor_total_gasto = deliveredOrders.reduce((sum, order) => sum + (parseFloat(order.ValorTotal) || 0), 0);
+          logs.push(`${timestamp()} -> Encontrados ${deliveredOrders.length} pedidos entregues.`);
+        } else {
+          logs.push(`${timestamp()} -> Aviso: Não foi possível buscar pedidos para ${contact.Email} (Status: ${ordersResponse.status}).`);
         }
 
         // --- 4. Adiciona Tags ---
@@ -121,6 +136,7 @@ serve(async (req) => {
         // --- 7. Envia para o Mautic (SIMULAÇÃO) ---
         await pushToMautic(contact);
         successCount++;
+        logs.push(`${timestamp()} -> Sucesso: Contato salvo no DB e enviado para Mautic (simulação).`);
         
         if (processedContactsForPreview.length < 5) {
             processedContactsForPreview.push({ ...contact, total_compras, valor_total_gasto, tags });
@@ -128,20 +144,24 @@ serve(async (req) => {
 
       } catch (error) {
         errorCount++;
+        logs.push(`${timestamp()} -> ERRO ao processar ${contact.Email}: ${error.message}`);
         console.error(`Falha ao processar o contato ${contact.Email}:`, error.message);
       }
     }
 
     const message = `Simulação concluída. Processados: ${contactsToProcess.length}. Salvos no DB: ${successCount}. Falhas: ${errorCount}.`;
+    logs.push(`${timestamp()} ${message}`);
     console.log(message);
 
     return new Response(
-      JSON.stringify({ message, processedContacts: processedContactsForPreview }),
+      JSON.stringify({ message, processedContacts: processedContactsForPreview, logs }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     )
   } catch (error) {
+    const errorMessage = `Erro fatal na função: ${error.message}`;
+    logs.push(`${timestamp()} ${errorMessage}`);
     console.error('Erro fatal na função de sincronização:', error.message);
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: error.message, logs }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 500,
     });

@@ -16,27 +16,33 @@ const Index = () => {
   const handleSync = async () => {
     setIsLoading(true);
     setSyncResult(null);
-    setLogs([]);
+    const initialLog = `[${new Date().toLocaleTimeString()}] Iniciando simulação...`;
+    setLogs([initialLog]);
     const toastId = showLoading("Iniciando simulação...");
-    setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Iniciando simulação...`]);
 
     try {
       const { data, error } = await supabase.functions.invoke("sync-magazord-mautic");
 
       dismissToast(toastId);
 
+      if (data?.logs) {
+        setLogs(data.logs);
+      }
+
       if (error) {
+        // If there's a function-level error, the error object is thrown
+        // The logs up to that point might still be in data.logs
         throw new Error(error.message);
       }
       
       showSuccess(data.message || "Simulação concluída com sucesso!");
-      setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${data.message}`]);
       setSyncResult(data.processedContacts);
 
     } catch (err: any) {
       dismissToast(toastId);
       const errorMessage = err.message || "Falha ao iniciar a simulação.";
       showError(errorMessage);
+      // Append the final error to the existing logs
       setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Erro: ${errorMessage}`]);
       console.error("Sync error:", err);
     } finally {
@@ -66,7 +72,7 @@ const Index = () => {
               <CardTitle>Log da Simulação</CardTitle>
             </CardHeader>
             <CardContent>
-              <pre className="bg-gray-900 text-white p-4 rounded-md overflow-x-auto text-sm">
+              <pre className="bg-gray-900 text-white p-4 rounded-md overflow-auto text-sm h-64">
                 {logs.join("\n")}
               </pre>
             </CardContent>
