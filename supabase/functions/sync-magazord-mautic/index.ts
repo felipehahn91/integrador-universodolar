@@ -60,12 +60,12 @@ serve(async (req) => {
     let pagesWithoutNewContacts = 0;
     const MAX_STALE_PAGES = 3; // Stop after 3 consecutive pages with no new unique contacts
 
-    logs.push(`${timestamp()} Iniciando coleta de contatos da API Magazord com paginação (ordenando pelos mais recentes)...`);
+    logs.push(`${timestamp()} Iniciando coleta de contatos da API Magazord com paginação (ordenando pelos mais antigos)...`);
 
     while (hasMorePages && collectedContactsMap.size < desiredCount) {
       const mapSizeBeforePage = collectedContactsMap.size;
       
-      const endpoint = `${magazordBaseUrl}/v2/site/pessoa?pagina=${currentPage}&orderBy=id&orderDirection=desc&limit=100`;
+      const endpoint = `${magazordBaseUrl}/v2/site/pessoa?pagina=${currentPage}&orderBy=id&orderDirection=asc&limit=100`;
       const response = await fetch(endpoint, { headers: { 'Authorization': authHeader } });
 
       if (!response.ok) {
