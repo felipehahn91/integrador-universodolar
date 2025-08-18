@@ -58,7 +58,7 @@ serve(async (req) => {
     let currentPage = 1;
     let hasMorePages = true;
     let pagesWithoutNewContacts = 0;
-    const MAX_STALE_PAGES = 3; // Stop after 3 consecutive pages with no new unique contacts
+    const MAX_STALE_PAGES = 3; 
 
     logs.push(`${timestamp()} Iniciando coleta de contatos da API Magazord com paginação (ordenando pelos mais antigos)...`);
 
@@ -101,16 +101,17 @@ serve(async (req) => {
       }
 
       const newlyAdded = collectedContactsMap.size - mapSizeBeforePage;
-      logs.push(`${timestamp()} Página ${currentPage}: ${rawContactsFromPage.length} recebidos, ${newlyAdded} novos adicionados. Total único: ${collectedContactsMap.size}.`);
+      logs.push(`${timestamp()} Página ${currentPage}: ${rawContactsFromPage.length} recebidos, ${filteredContactsFromPage.length} válidos, ${newlyAdded} novos adicionados. Total único: ${collectedContactsMap.size}.`);
 
-      if (newlyAdded === 0 && rawContactsFromPage.length > 0) {
+      // CORREÇÃO: Apenas incrementa o contador de páginas repetidas se a página retornou contatos válidos, mas nenhum deles era novo.
+      if (filteredContactsFromPage.length > 0 && newlyAdded === 0) {
         pagesWithoutNewContacts++;
       } else {
-        pagesWithoutNewContacts = 0; // Reset if we find new contacts or the page is empty
+        pagesWithoutNewContacts = 0; // Reseta se encontramos novos contatos ou se a página só tinha contatos filtrados.
       }
 
       if (pagesWithoutNewContacts >= MAX_STALE_PAGES) {
-        logs.push(`${timestamp()} Nenhuma novo contato único encontrado nas últimas ${MAX_STALE_PAGES} páginas. Finalizando coleta.`);
+        logs.push(`${timestamp()} Nenhuma novo contato único encontrado nas últimas ${MAX_STALE_PAGES} páginas válidas. Finalizando coleta.`);
         hasMorePages = false;
       }
       
