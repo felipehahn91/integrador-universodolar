@@ -28,7 +28,6 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
     
-    // --- Pega Segredos e Configurações ---
     logs.push(`${timestamp()} Buscando segredos e configurações...`);
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
@@ -37,7 +36,6 @@ serve(async (req) => {
       throw new Error('As credenciais da API Magazord não foram configuradas nos segredos.');
     }
 
-    // --- Cria o Header de Autenticação Basic Auth ---
     const authString = `${magazordApiToken}:${magazordApiSecret}`;
     const authHeader = `Basic ${btoa(authString)}`;
     logs.push(`${timestamp()} Header de autenticação Basic Auth criado.`);
@@ -51,7 +49,6 @@ serve(async (req) => {
     if (settingsError) throw settingsError;
     logs.push(`${timestamp()} Configurações carregadas: Intervalo de ${settings.sync_interval_minutes} min, Lote de ${settings.batch_size}.`);
 
-    // --- 1. Busca Contatos da Magazord ---
     const magazordBaseUrl = 'https://expresso10.painel.magazord.com.br/api';
     const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa`;
     
@@ -66,7 +63,6 @@ serve(async (req) => {
     logs.push(`${timestamp()} Conexão com a API Magazord bem-sucedida.`);
     const contactsResult = await contactsResponse.json();
     
-    // Adicionando log para ver a resposta completa
     logs.push(`${timestamp()} Resposta recebida da API Magazord: ${JSON.stringify(contactsResult, null, 2)}`);
 
     const allContacts = contactsResult.registros;
@@ -76,7 +72,6 @@ serve(async (req) => {
     }
     logs.push(`${timestamp()} Encontrados ${allContacts.length} contatos no total.`);
 
-    // --- 2. Filtra e Processa Contatos em Lotes ---
     const excludedDomains = new Set(settings.excluded_domains || []);
     const filteredContacts = allContacts.filter(contact => {
       if (!contact.Email || !contact.Codigo) return false;
@@ -94,7 +89,6 @@ serve(async (req) => {
     for (const contact of contactsToProcess) {
       try {
         logs.push(`${timestamp()} Processando ${contact.Email} (ID: ${contact.Codigo})...`);
-        // --- 3. Enriquece Contato com Dados de Pedidos ---
         const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.CpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
           headers: { 'Authorization': authHeader },
@@ -114,14 +108,12 @@ serve(async (req) => {
           logs.push(`${timestamp()} -> Aviso: Não foi possível buscar pedidos para ${contact.Email} (Status: ${ordersResponse.status}).`);
         }
 
-        // --- 4. Adiciona Tags ---
         const tags = [];
         if (contact.PessoaFisicaJuridica === 'F') tags.push('Pessoa Física');
         else if (contact.PessoaFisicaJuridica === 'J') tags.push('Pessoa Jurídica');
         if (contact.Sexo === 'M') tags.push('Masculino');
         else if (contact.Sexo === 'F') tags.push('Feminino');
 
-        // --- 5. Prepara dados para o banco ---
         const contactForDb = {
           magazord_id: contact.Codigo,
           nome: contact.Nome,
@@ -135,14 +127,12 @@ serve(async (req) => {
           last_processed_at: new Date().toISOString(),
         };
 
-        // --- 6. Salva no Supabase ---
         const { error: upsertError } = await supabaseAdmin
           .from('magazord_contacts')
           .upsert(contactForDb, { onConflict: 'magazord_id' });
 
         if (upsertError) throw upsertError;
 
-        // --- 7. Envia para o Mautic (SIMULAÇÃO) ---
         await pushToMautic(contact);
         successCount++;
         logs.push(`${timestamp()} -> Sucesso: Contato salvo no DB e enviado para Mautic (simulação).`);
@@ -160,19 +150,30 @@ serve(async (req) => {
 
     const message = `Simulação concluída. Processados: ${contactsToProcess.length}. Salvos no DB: ${successCount}. Falhas: ${errorCount}.`;
     logs.push(`${timestamp()} ${message}`);
-    console.log(message);
-
+    
     return new Response(
-      JSON.stringify({ message, processedContacts: processedContactsForPreview, logs }),
+      JSON.stringify({ 
+        success: true, 
+        data: { message, processedContacts: processedContactsForPreview }, 
+        logs 
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     )
   } catch (error) {
     const errorMessage = `Erro fatal na função: ${error.message}`;
     logs.push(`${timestamp()} ${errorMessage}`);
     console.error('Erro fatal na função de sincronização:', error.message);
-    return new Response(JSON.stringify({ error: error.message, logs }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 500,
-    });
+    
+    return new Response(
+      JSON.stringify({ 
+        success: false, 
+        error: { message: error.message }, 
+        logs 
+      }), 
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      }
+    );
   }
 })

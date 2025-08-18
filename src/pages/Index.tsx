@@ -25,28 +25,32 @@ const Index = () => {
 
       dismissToast(toastId);
 
-      // A função retorna os logs mesmo em caso de erro, então vamos exibi-los.
+      if (error) {
+        throw error; // Lida com erros de rede ou de invocação da função
+      }
+
+      // A função agora sempre retorna os logs, então podemos exibi-los imediatamente.
       if (data?.logs) {
         setLogs(data.logs);
       }
 
-      if (error) {
-        // 'data' pode conter a mensagem de erro detalhada da função.
-        // Se não houver, usamos a mensagem de erro padrão.
-        const detailedError = data?.error || error.message;
-        throw new Error(detailedError);
+      // Verificamos o status de sucesso dentro da resposta da função
+      if (!data.success) {
+        throw new Error(data.error.message || "Ocorreu um erro desconhecido na função.");
       }
       
-      showSuccess(data.message || "Simulação concluída com sucesso!");
-      setSyncResult(data.processedContacts);
+      // Se tudo correu bem, mostramos a mensagem de sucesso e os resultados
+      showSuccess(data.data.message || "Simulação concluída com sucesso!");
+      setSyncResult(data.data.processedContacts);
 
     } catch (err: any) {
       dismissToast(toastId);
       const errorMessage = err.message || "Falha ao iniciar a simulação.";
       showError(errorMessage);
       
-      // Adiciona o erro final ao log se ele ainda não estiver lá.
+      // Se os logs não foram definidos pela resposta da API, adicionamos o erro final.
       setLogs(prev => {
+        if (prev.length > 1) return prev; // Logs já foram populados
         const lastLog = prev[prev.length - 1] || "";
         if (lastLog.includes(errorMessage)) {
           return prev;
