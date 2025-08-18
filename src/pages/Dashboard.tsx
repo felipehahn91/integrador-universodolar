@@ -129,13 +129,11 @@ const Dashboard = () => {
 
     let jobIdToUse = activeJobId;
 
-    // If there's an active job but it's not failed, don't do anything
     if (jobStatus && jobStatus.status !== 'failed') {
       showError("Uma sincronização já está em andamento.");
       return;
     }
 
-    // If there is no active failed job, create a new one
     if (!jobIdToUse || (jobStatus && jobStatus.status !== 'failed')) {
       const { data: newJob, error: createJobError } = await supabase
         .from('sync_jobs')
@@ -151,13 +149,27 @@ const Dashboard = () => {
       setActiveJobId(jobIdToUse);
     }
     
-    // Invoke the function with the determined job ID
     supabase.functions.invoke("sync-magazord-mautic", {
       body: { limit, jobId: jobIdToUse },
-    }).then(({ error }) => {
+    }).then(async ({ error }) => {
       if (error) {
         console.error("Function invocation failed:", error);
-        showError(`Falha ao chamar a função de sincronização: ${error.message}`);
+        const timestamp = `[${new Date().toLocaleTimeString()}]`;
+        const logMessage = `${timestamp} ERRO CRÍTICO: A chamada para a função de sincronização falhou. Isso pode ser um timeout ou um problema de rede. Tente continuar a sincronização.`;
+        
+        // Update the job in the database to reflect this failure
+        await supabase
+          .from('sync_jobs')
+          .update({ 
+            status: 'failed', 
+            logs: [logMessage],
+            finished_at: new Date().toISOString()
+          })
+          .eq('id', jobIdToUse);
+
+        // Manually trigger a refetch to update the UI immediately
+        queryClient.invalidateQueries({ queryKey: ['job_status', jobIdToUse] });
+        queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
       }
     });
   };
