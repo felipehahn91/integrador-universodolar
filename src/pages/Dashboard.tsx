@@ -10,15 +10,28 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
-const fetchContacts = async () => {
-  const { data, error } = await supabase
+const PAGE_SIZE = 15;
+
+const fetchContacts = async (page: number) => {
+  const from = (page - 1) * PAGE_SIZE;
+  const to = from + PAGE_SIZE - 1;
+
+  const { data, error, count } = await supabase
     .from("magazord_contacts")
-    .select("*")
+    .select("*", { count: 'exact' })
     .order("created_at", { ascending: false })
-    .limit(100);
+    .range(from, to);
+    
   if (error) throw new Error(error.message);
-  return data;
+  return { contacts: data, count };
 };
 
 const fetchSyncStats = async () => {
@@ -34,11 +47,17 @@ const Dashboard = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [syncAmount, setSyncAmount] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
 
-  const { data: contacts, isLoading: isLoadingContacts, isError: isContactsError } = useQuery({
-    queryKey: ["magazord_contacts"],
-    queryFn: fetchContacts,
+  const { data, isLoading: isLoadingContacts, isError: isContactsError } = useQuery({
+    queryKey: ["magazord_contacts", currentPage],
+    queryFn: () => fetchContacts(currentPage),
+    keepPreviousData: true,
   });
+  
+  const contacts = data?.contacts;
+  const totalContacts = data?.count ?? 0;
+  const totalPages = Math.ceil(totalContacts / PAGE_SIZE);
 
   const { data: stats, isLoading: isLoadingStats } = useQuery({
     queryKey: ["sync_stats"],
@@ -182,6 +201,35 @@ const Dashboard = () => {
               )}
             </TableBody>
           </Table>
+          {totalPages > 1 && (
+            <Pagination className="mt-4">
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setCurrentPage((prev) => Math.max(prev - 1, 1));
+                    }}
+                    className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                  />
+                </PaginationItem>
+                <PaginationItem className="text-sm text-muted-foreground">
+                  Página {currentPage} de {totalPages}
+                </PaginationItem>
+                <PaginationItem>
+                  <PaginationNext
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setCurrentPage((prev) => Math.min(prev + 1, totalPages));
+                    }}
+                    className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          )}
         </CardContent>
       </Card>
     </div>
