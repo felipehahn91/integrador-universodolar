@@ -110,9 +110,9 @@ const Index = () => {
                 </TableHeader>
                 <TableBody>
                   {syncResult.map((contact) => (
-                    <TableRow key={contact.Codigo}>
-                      <TableCell>{contact.Nome}</TableCell>
-                      <TableCell>{contact.Email}</TableCell>
+                    <TableRow key={contact.id}>
+                      <TableCell>{contact.nome}</TableCell>
+                      <TableCell>{contact.email}</TableCell>
                       <TableCell className="text-center">{contact.total_compras}</TableCell>
                       <TableCell className="text-right">
                         {contact.valor_total_gasto.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}

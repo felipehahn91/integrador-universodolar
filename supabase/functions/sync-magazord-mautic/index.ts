@@ -65,7 +65,7 @@ serve(async (req) => {
     
     logs.push(`${timestamp()} Resposta recebida da API Magazord: ${JSON.stringify(contactsResult, null, 2)}`);
 
-    const allContacts = contactsResult.registros;
+    const allContacts = contactsResult.data.items;
 
     if (!Array.isArray(allContacts)) {
       throw new Error('A resposta da API Magazord não retornou uma lista de contatos válida.');
@@ -74,8 +74,8 @@ serve(async (req) => {
 
     const excludedDomains = new Set(settings.excluded_domains || []);
     const filteredContacts = allContacts.filter(contact => {
-      if (!contact.Email || !contact.Codigo) return false;
-      const domain = contact.Email.split('@')[1];
+      if (!contact.email || !contact.id) return false;
+      const domain = contact.email.split('@')[1];
       return domain && !excludedDomains.has(domain.toLowerCase());
     });
 
@@ -88,8 +88,8 @@ serve(async (req) => {
 
     for (const contact of contactsToProcess) {
       try {
-        logs.push(`${timestamp()} Processando ${contact.Email} (ID: ${contact.Codigo})...`);
-        const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.CpfCnpj}`;
+        logs.push(`${timestamp()} Processando ${contact.email} (ID: ${contact.id})...`);
+        const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.cpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
           headers: { 'Authorization': authHeader },
         });
@@ -99,28 +99,35 @@ serve(async (req) => {
 
         if (ordersResponse.ok) {
           const ordersResult = await ordersResponse.json();
-          const orders = ordersResult.registros || [];
+          const orders = ordersResult.data?.items || [];
           const deliveredOrders = orders.filter(o => o.Status === 'Entregue');
           total_compras = deliveredOrders.length;
           valor_total_gasto = deliveredOrders.reduce((sum, order) => sum + (parseFloat(order.ValorTotal) || 0), 0);
           logs.push(`${timestamp()} -> Encontrados ${deliveredOrders.length} pedidos entregues.`);
         } else {
-          logs.push(`${timestamp()} -> Aviso: Não foi possível buscar pedidos para ${contact.Email} (Status: ${ordersResponse.status}).`);
+          logs.push(`${timestamp()} -> Aviso: Não foi possível buscar pedidos para ${contact.email} (Status: ${ordersResponse.status}).`);
         }
 
         const tags = [];
-        if (contact.PessoaFisicaJuridica === 'F') tags.push('Pessoa Física');
-        else if (contact.PessoaFisicaJuridica === 'J') tags.push('Pessoa Jurídica');
-        if (contact.Sexo === 'M') tags.push('Masculino');
-        else if (contact.Sexo === 'F') tags.push('Feminino');
+        let tipoPessoa = null;
+        if (contact.tipo === 1) {
+          tags.push('Pessoa Física');
+          tipoPessoa = 'F';
+        } else if (contact.tipo === 2) {
+          tags.push('Pessoa Jurídica');
+          tipoPessoa = 'J';
+        }
+        
+        if (contact.sexo === 'M') tags.push('Masculino');
+        else if (contact.sexo === 'F') tags.push('Feminino');
 
         const contactForDb = {
-          magazord_id: contact.Codigo,
-          nome: contact.Nome,
-          email: contact.Email,
-          cpf_cnpj: contact.CpfCnpj,
-          tipo_pessoa: contact.PessoaFisicaJuridica,
-          sexo: contact.Sexo,
+          magazord_id: String(contact.id),
+          nome: contact.nome,
+          email: contact.email,
+          cpf_cnpj: contact.cpfCnpj,
+          tipo_pessoa: tipoPessoa,
+          sexo: contact.sexo,
           total_compras: total_compras,
           valor_total_gasto: valor_total_gasto,
           tags: tags,
@@ -143,8 +150,8 @@ serve(async (req) => {
 
       } catch (error) {
         errorCount++;
-        logs.push(`${timestamp()} -> ERRO ao processar ${contact.Email}: ${error.message}`);
-        console.error(`Falha ao processar o contato ${contact.Email}:`, error.message);
+        logs.push(`${timestamp()} -> ERRO ao processar ${contact.email}: ${error.message}`);
+        console.error(`Falha ao processar o contato ${contact.email}:`, error.message);
       }
     }
 
