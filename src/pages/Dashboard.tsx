@@ -75,18 +75,34 @@ const Dashboard = () => {
       });
       dismissToast(toastId);
 
-      if (error) throw error;
+      if (error) throw error; // This will be thrown for non-200 status codes
+
       if (data?.logs) setLogs(data.logs);
-      if (!data.success) throw new Error(data.error.message || "Ocorreu um erro na função.");
       
       showSuccess(data.data.message || "Sincronização concluída com sucesso!");
       queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
       queryClient.invalidateQueries({ queryKey: ["sync_stats"] });
     } catch (err: any) {
       dismissToast(toastId);
-      const errorMessage = err.message || "Falha ao iniciar a sincronização.";
+      let errorMessage = "Falha ao iniciar a sincronização.";
+      
+      // supabase-js wraps function errors in a specific object
+      if (err.context && err.context.data) {
+        const functionResponse = err.context.data;
+        if (functionResponse.logs) {
+          setLogs(functionResponse.logs);
+        }
+        // The final summary message from the function is in `data.message`
+        if (functionResponse.data && functionResponse.data.message) {
+            errorMessage = functionResponse.data.message;
+        } else if (functionResponse.error && functionResponse.error.message) {
+            errorMessage = functionResponse.error.message;
+        }
+      } else {
+        errorMessage = err.message || errorMessage;
+      }
+      
       showError(errorMessage);
-      setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Erro: ${errorMessage}`]);
     } finally {
       setIsSyncing(false);
     }

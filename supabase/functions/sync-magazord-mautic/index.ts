@@ -54,7 +54,6 @@ serve(async (req) => {
     const excludedDomains = new Set(settings.excluded_domains || []);
     const desiredCount = limit === null ? Infinity : limit;
 
-    // --- Lógica de Paginação ---
     let collectedFilteredContacts = [];
     let currentPage = 1;
     let hasMorePages = true;
@@ -89,7 +88,6 @@ serve(async (req) => {
       logs.push(`${timestamp()} Página ${currentPage} carregada. Contatos válidos coletados: ${collectedFilteredContacts.length}.`);
       currentPage++;
     }
-    // --- Fim da Lógica de Paginação ---
 
     const contactsToProcess = collectedFilteredContacts.slice(0, desiredCount);
     logs.push(`${timestamp()} Coleta finalizada. Processando um lote de ${contactsToProcess.length} contatos.`);
@@ -188,35 +186,40 @@ serve(async (req) => {
       } catch (error) {
         errorCount++;
         logs.push(`${timestamp()} -> ERRO ao processar ${contact.email}: ${error.message}`);
-        console.error(`Falha ao processar o contato ${contact.email}:`, error.message);
+        console.error(`Falha ao processar o contato ${contact.email}:`, error);
       }
     }
 
     const message = `Sincronização concluída. Processados: ${contactsToProcess.length}. Sucesso: ${successCount}. Falhas: ${errorCount}.`;
     logs.push(`${timestamp()} ${message}`);
     
+    const overallSuccess = errorCount === 0;
+
     return new Response(
       JSON.stringify({ 
-        success: true, 
+        success: overallSuccess, 
         data: { message, processedContacts: processedContactsForPreview }, 
         logs 
       }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+      { 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: overallSuccess ? 200 : 422 // 422 Unprocessable Entity
+      }
     )
   } catch (error) {
     const errorMessage = `Erro fatal na função: ${error.message}`;
     logs.push(`${timestamp()} ${errorMessage}`);
-    console.error('Erro fatal na função de sincronização:', error.message);
+    console.error('Erro fatal na função de sincronização:', error);
     
     return new Response(
       JSON.stringify({ 
         success: false, 
-        error: { message: error.message }, 
+        error: { message: errorMessage }, 
         logs 
       }), 
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
+        status: 500,
       }
     );
   }
