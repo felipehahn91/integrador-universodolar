@@ -36,6 +36,7 @@ serve(async (req) => {
   }
 
   let jobId = '';
+  // Each run starts with a fresh log array.
   const logs: string[] = [];
 
   const supabaseAdmin = createClient(
@@ -50,17 +51,15 @@ serve(async (req) => {
 
     const { data: jobData, error: jobFetchError } = await supabaseAdmin
       .from('sync_jobs')
-      .select('last_processed_page, logs')
+      .select('last_processed_page') // We no longer need to fetch old logs
       .eq('id', jobId)
       .single();
 
     if (jobFetchError) throw jobFetchError;
 
-    // Use existing logs if resuming
-    logs.push(...(jobData.logs || []));
     logs.push(`${timestamp()} Job ${jobId} iniciado/continuado.`);
     
-    await supabaseAdmin.from('sync_jobs').update({ status: 'running' }).eq('id', jobId);
+    await supabaseAdmin.from('sync_jobs').update({ status: 'running', logs: logs }).eq('id', jobId);
     
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
@@ -105,7 +104,6 @@ serve(async (req) => {
       logs.push(`${timestamp()} Processando página ${currentPage} com ${rawContacts.length} contatos.`);
 
       for (const contact of rawContacts) {
-        // ... (lógica de processamento de contato individual permanece a mesma)
         const domain = contact.email?.split('@')[1];
         if (!contact.id || !contact.email || (domain && excludedDomains.has(domain.toLowerCase()))) continue;
         try {
