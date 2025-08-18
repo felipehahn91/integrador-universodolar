@@ -25,14 +25,16 @@ const Index = () => {
 
       dismissToast(toastId);
 
+      // A função retorna os logs mesmo em caso de erro, então vamos exibi-los.
       if (data?.logs) {
         setLogs(data.logs);
       }
 
       if (error) {
-        // If there's a function-level error, the error object is thrown
-        // The logs up to that point might still be in data.logs
-        throw new Error(error.message);
+        // 'data' pode conter a mensagem de erro detalhada da função.
+        // Se não houver, usamos a mensagem de erro padrão.
+        const detailedError = data?.error || error.message;
+        throw new Error(detailedError);
       }
       
       showSuccess(data.message || "Simulação concluída com sucesso!");
@@ -42,8 +44,15 @@ const Index = () => {
       dismissToast(toastId);
       const errorMessage = err.message || "Falha ao iniciar a simulação.";
       showError(errorMessage);
-      // Append the final error to the existing logs
-      setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Erro: ${errorMessage}`]);
+      
+      // Adiciona o erro final ao log se ele ainda não estiver lá.
+      setLogs(prev => {
+        const lastLog = prev[prev.length - 1] || "";
+        if (lastLog.includes(errorMessage)) {
+          return prev;
+        }
+        return [...prev, `[${new Date().toLocaleTimeString()}] Erro: ${errorMessage}`];
+      });
       console.error("Sync error:", err);
     } finally {
       setIsLoading(false);
