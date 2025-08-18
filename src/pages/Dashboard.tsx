@@ -1,15 +1,16 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
-import { showLoading, showSuccess, showError, dismissToast } from "@/utils/toast";
+import { showSuccess, showError } from "@/utils/toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import {
   Pagination,
   PaginationContent,
@@ -23,13 +24,11 @@ const PAGE_SIZE = 15;
 const fetchContacts = async (page: number) => {
   const from = (page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
-
   const { data, error, count } = await supabase
     .from("magazord_contacts")
     .select("*", { count: 'exact' })
     .order("created_at", { ascending: false })
     .range(from, to);
-    
   if (error) throw new Error(error.message);
   return { contacts: data, count };
 };
@@ -41,22 +40,31 @@ const fetchSyncStats = async () => {
   return data.data;
 };
 
+const fetchJobStatus = async (jobId: string) => {
+  const { data, error } = await supabase
+    .from('sync_jobs')
+    .select('*')
+    .eq('id', jobId)
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 const Dashboard = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
   const [syncAmount, setSyncAmount] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
-  const { data, isLoading: isLoadingContacts, isError: isContactsError } = useQuery({
+  const { data: contactsData, isLoading: isLoadingContacts } = useQuery({
     queryKey: ["magazord_contacts", currentPage],
     queryFn: () => fetchContacts(currentPage),
     keepPreviousData: true,
   });
   
-  const contacts = data?.contacts;
-  const totalContacts = data?.count ?? 0;
+  const contacts = contactsData?.contacts;
+  const totalContacts = contactsData?.count ?? 0;
   const totalPages = Math.ceil(totalContacts / PAGE_SIZE);
 
   const { data: stats, isLoading: isLoadingStats } = useQuery({
@@ -64,49 +72,56 @@ const Dashboard = () => {
     queryFn: fetchSyncStats,
   });
 
+  const { data: jobStatus } = useQuery({
+    queryKey: ['job_status', activeJobId],
+    queryFn: () => fetchJobStatus(activeJobId!),
+    enabled: !!activeJobId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'running' || status === 'pending' ? 2000 : false;
+    },
+    onSuccess: (data) => {
+      if (data.status === 'completed' || data.status === 'failed') {
+        setActiveJobId(null);
+        queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
+        queryClient.invalidateQueries({ queryKey: ["sync_stats"] });
+        if (data.status === 'completed') {
+          showSuccess("Sincronização concluída com sucesso!");
+        } else {
+          showError("A sincronização falhou. Verifique os logs.");
+        }
+      }
+    }
+  });
+
   const handleSync = async (limit: number | null) => {
-    setIsSyncing(true);
-    setLogs([`[${new Date().toLocaleTimeString()}] Iniciando sincronização...`]);
-    const toastId = showLoading("Iniciando sincronização...");
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      showError("Você precisa estar logado para iniciar uma sincronização.");
+      return;
+    }
 
     try {
       const { data, error } = await supabase.functions.invoke("sync-magazord-mautic", {
-        body: { limit },
+        body: { limit, user_id: user.id },
       });
-      dismissToast(toastId);
 
-      if (error) throw error; // This will be thrown for non-200 status codes
-
-      if (data?.logs) setLogs(data.logs);
-      
-      showSuccess(data.data.message || "Sincronização concluída com sucesso!");
-      queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
-      queryClient.invalidateQueries({ queryKey: ["sync_stats"] });
-    } catch (err: any) {
-      dismissToast(toastId);
-      let errorMessage = "Falha ao iniciar a sincronização.";
-      
-      // supabase-js wraps function errors in a specific object
-      if (err.context && err.context.data) {
-        const functionResponse = err.context.data;
-        if (functionResponse.logs) {
-          setLogs(functionResponse.logs);
-        }
-        // The final summary message from the function is in `data.message`
-        if (functionResponse.data && functionResponse.data.message) {
-            errorMessage = functionResponse.data.message;
-        } else if (functionResponse.error && functionResponse.error.message) {
-            errorMessage = functionResponse.error.message;
-        }
+      if (error) throw error;
+      if (data.jobId) {
+        setActiveJobId(data.jobId);
       } else {
-        errorMessage = err.message || errorMessage;
+        throw new Error("A função não retornou um ID de trabalho.");
       }
-      
-      showError(errorMessage);
-    } finally {
-      setIsSyncing(false);
+    } catch (err: any) {
+      showError(err.message || "Falha ao iniciar a sincronização.");
     }
   };
+  
+  const isSyncing = !!activeJobId;
+  const logs = jobStatus?.logs || [];
+  const progress = jobStatus && jobStatus.total_count > 0 
+    ? (jobStatus.processed_count / jobStatus.total_count) * 100 
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -143,24 +158,29 @@ const Dashboard = () => {
                 type="number"
                 value={syncAmount}
                 onChange={(e) => setSyncAmount(Number(e.target.value))}
+                disabled={isSyncing}
               />
             </div>
             <Button onClick={() => handleSync(syncAmount)} disabled={isSyncing}>
-              {isSyncing ? "..." : "Sincronizar"}
+              {isSyncing ? "Sincronizando..." : "Sincronizar"}
             </Button>
             <Button onClick={() => handleSync(null)} disabled={isSyncing} variant="secondary">
-              {isSyncing ? "..." : "Sincronizar Tudo"}
+              {isSyncing ? "Sincronizando..." : "Sincronizar Tudo"}
             </Button>
           </CardContent>
         </Card>
       </div>
 
-      {logs.length > 0 && (
+      {isSyncing && jobStatus && (
         <Card>
           <CardHeader>
-            <CardTitle>Log da Sincronização</CardTitle>
+            <CardTitle>Progresso da Sincronização</CardTitle>
+            <CardDescription>
+              Status: {jobStatus.status} ({jobStatus.processed_count} / {jobStatus.total_count})
+            </CardDescription>
           </CardHeader>
           <CardContent>
+            <Progress value={progress} className="mb-4" />
             <pre className="bg-gray-900 text-white p-4 rounded-md overflow-auto text-sm h-64">
               {logs.join("\n")}
             </pre>
@@ -171,7 +191,7 @@ const Dashboard = () => {
       <Card>
         <CardHeader>
           <CardTitle>Contatos Sincronizados</CardTitle>
-          <CardDescription>Lista dos últimos contatos sincronizados. Clique para ver detalhes.</CardDescription>
+          <CardDescription>Lista dos últimos contatos sincronizados.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -193,8 +213,6 @@ const Dashboard = () => {
                     <TableCell className="text-right"><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
                   </TableRow>
                 ))
-              ) : isContactsError ? (
-                <TableRow><TableCell colSpan={4} className="text-center text-red-500">Erro ao carregar contatos.</TableCell></TableRow>
               ) : (
                 contacts?.map((contact) => (
                   <TableRow 
@@ -223,10 +241,7 @@ const Dashboard = () => {
                 <PaginationItem>
                   <PaginationPrevious
                     href="#"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setCurrentPage((prev) => Math.max(prev - 1, 1));
-                    }}
+                    onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.max(p - 1, 1)); }}
                     className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
                   />
                 </PaginationItem>
@@ -236,10 +251,7 @@ const Dashboard = () => {
                 <PaginationItem>
                   <PaginationNext
                     href="#"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setCurrentPage((prev) => Math.min(prev + 1, totalPages));
-                    }}
+                    onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.min(p + 1, totalPages)); }}
                     className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
                   />
                 </PaginationItem>
