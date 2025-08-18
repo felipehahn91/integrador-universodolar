@@ -41,8 +41,8 @@ serve(async (req) => {
     if (settingsError) throw settingsError;
 
     // --- 1. Busca Contatos da Magazord ---
-    const magazordBaseUrl = 'https://api.magazord.com.br'; // URL Base da API
-    const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa`; // ENDPOINT CORRIGIDO
+    const magazordBaseUrl = 'https://expresso10.painel.magazord.com.br/api'; // URL Base da API ATUALIZADA
+    const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa`;
     
     console.log('Buscando contatos da Magazord...');
     const contactsResponse = await fetch(contactsEndpoint, {
@@ -74,7 +74,7 @@ serve(async (req) => {
     for (const contact of contactsToProcess) {
       try {
         // --- 3. Enriquece Contato com Dados de Pedidos ---
-        const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.CpfCnpj}`; // ENDPOINT CORRIGIDO
+        const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.CpfCnpj}`;
         const ordersResponse = await fetch(ordersEndpoint, {
           headers: { 'token': magazordApiToken, 'secret': magazordApiSecret },
         });
