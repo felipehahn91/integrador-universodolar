@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { showLoading, showSuccess, showError, dismissToast } from "@/utils/toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useNavigate } from "react-router-dom";
 
 const fetchContacts = async () => {
   const { data, error } = await supabase
@@ -20,6 +21,7 @@ const fetchContacts = async () => {
 
 const Dashboard = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [isSyncing, setIsSyncing] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
 
@@ -30,8 +32,8 @@ const Dashboard = () => {
 
   const handleSync = async () => {
     setIsSyncing(true);
-    setLogs([`[${new Date().toLocaleTimeString()}] Iniciando simulação...`]);
-    const toastId = showLoading("Iniciando simulação...");
+    setLogs([`[${new Date().toLocaleTimeString()}] Iniciando sincronização...`]);
+    const toastId = showLoading("Iniciando sincronização...");
 
     try {
       const { data, error } = await supabase.functions.invoke("sync-magazord-mautic");
@@ -41,11 +43,11 @@ const Dashboard = () => {
       if (data?.logs) setLogs(data.logs);
       if (!data.success) throw new Error(data.error.message || "Ocorreu um erro na função.");
       
-      showSuccess(data.data.message || "Simulação concluída com sucesso!");
+      showSuccess(data.data.message || "Sincronização concluída com sucesso!");
       queryClient.invalidateQueries({ queryKey: ["magazord_contacts"] });
     } catch (err: any) {
       dismissToast(toastId);
-      const errorMessage = err.message || "Falha ao iniciar a simulação.";
+      const errorMessage = err.message || "Falha ao iniciar a sincronização.";
       showError(errorMessage);
       setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Erro: ${errorMessage}`]);
     } finally {
@@ -58,7 +60,7 @@ const Dashboard = () => {
       <Card>
         <CardHeader>
           <CardTitle>Sincronização Manual</CardTitle>
-          <CardDescription>Inicie a sincronização de contatos entre Magazord e Mautic.</CardDescription>
+          <CardDescription>Inicie a sincronização de contatos e pedidos entre Magazord e Mautic.</CardDescription>
         </CardHeader>
         <CardContent>
           <Button onClick={handleSync} disabled={isSyncing}>
@@ -83,7 +85,7 @@ const Dashboard = () => {
       <Card>
         <CardHeader>
           <CardTitle>Contatos Sincronizados</CardTitle>
-          <CardDescription>Lista dos últimos contatos sincronizados.</CardDescription>
+          <CardDescription>Lista dos últimos contatos sincronizados. Clique em um contato para ver os detalhes.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -109,7 +111,11 @@ const Dashboard = () => {
                 <TableRow><TableCell colSpan={4} className="text-center text-red-500">Erro ao carregar contatos.</TableCell></TableRow>
               ) : (
                 contacts?.map((contact) => (
-                  <TableRow key={contact.id}>
+                  <TableRow 
+                    key={contact.id} 
+                    onClick={() => navigate(`/contact/${contact.id}`)}
+                    className="cursor-pointer hover:bg-muted/50"
+                  >
                     <TableCell>{contact.nome}</TableCell>
                     <TableCell>{contact.email}</TableCell>
                     <TableCell>

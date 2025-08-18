@@ -63,8 +63,6 @@ serve(async (req) => {
     logs.push(`${timestamp()} Conexão com a API Magazord bem-sucedida.`);
     const contactsResult = await contactsResponse.json();
     
-    logs.push(`${timestamp()} Resposta recebida da API Magazord: ${JSON.stringify(contactsResult, null, 2)}`);
-
     const allContacts = contactsResult.data.items;
 
     if (!Array.isArray(allContacts)) {
@@ -89,25 +87,7 @@ serve(async (req) => {
     for (const contact of contactsToProcess) {
       try {
         logs.push(`${timestamp()} Processando ${contact.email} (ID: ${contact.id})...`);
-        const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.cpfCnpj}`;
-        const ordersResponse = await fetch(ordersEndpoint, {
-          headers: { 'Authorization': authHeader },
-        });
-
-        let total_compras = 0;
-        let valor_total_gasto = 0;
-
-        if (ordersResponse.ok) {
-          const ordersResult = await ordersResponse.json();
-          const orders = ordersResult.data?.items || [];
-          const deliveredOrders = orders.filter(o => o.Status === 'Entregue');
-          total_compras = deliveredOrders.length;
-          valor_total_gasto = deliveredOrders.reduce((sum, order) => sum + (parseFloat(order.ValorTotal) || 0), 0);
-          logs.push(`${timestamp()} -> Encontrados ${deliveredOrders.length} pedidos entregues.`);
-        } else {
-          logs.push(`${timestamp()} -> Aviso: Não foi possível buscar pedidos para ${contact.email} (Status: ${ordersResponse.status}).`);
-        }
-
+        
         const tags = [];
         let tipoPessoa = null;
         if (contact.tipo === 1) {
@@ -121,28 +101,77 @@ serve(async (req) => {
         if (contact.sexo === 'M') tags.push('Masculino');
         else if (contact.sexo === 'F') tags.push('Feminino');
 
-        const contactForDb = {
-          magazord_id: String(contact.id),
-          nome: contact.nome,
-          email: contact.email,
-          cpf_cnpj: contact.cpfCnpj,
-          tipo_pessoa: tipoPessoa,
-          sexo: contact.sexo,
-          total_compras: total_compras,
-          valor_total_gasto: valor_total_gasto,
-          tags: tags,
-          last_processed_at: new Date().toISOString(),
-        };
-
-        const { error: upsertError } = await supabaseAdmin
+        // Upsert do contato e retorna o ID do nosso banco
+        const { data: dbContact, error: upsertError } = await supabaseAdmin
           .from('magazord_contacts')
-          .upsert(contactForDb, { onConflict: 'magazord_id' });
+          .upsert({
+            magazord_id: String(contact.id),
+            nome: contact.nome,
+            email: contact.email,
+            cpf_cnpj: contact.cpfCnpj,
+            tipo_pessoa: tipoPessoa,
+            sexo: contact.sexo,
+            tags: tags,
+            last_processed_at: new Date().toISOString(),
+          }, { onConflict: 'magazord_id' })
+          .select('id')
+          .single();
 
         if (upsertError) throw upsertError;
+        logs.push(`${timestamp()} -> Contato ${contact.email} salvo/atualizado no DB.`);
+
+        // Busca e processa os pedidos
+        const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?CpfCnpj=${contact.cpfCnpj}`;
+        const ordersResponse = await fetch(ordersEndpoint, {
+          headers: { 'Authorization': authHeader },
+        });
+
+        let total_compras = 0;
+        let valor_total_gasto = 0;
+
+        if (ordersResponse.ok) {
+          const ordersResult = await ordersResponse.json();
+          const orders = ordersResult.data?.items || [];
+          const deliveredOrders = orders.filter(o => o.Status === 'Entregue');
+          
+          total_compras = deliveredOrders.length;
+          valor_total_gasto = deliveredOrders.reduce((sum, order) => sum + (parseFloat(order.ValorTotal) || 0), 0);
+          logs.push(`${timestamp()} -> Encontrados ${deliveredOrders.length} pedidos entregues.`);
+
+          if (deliveredOrders.length > 0) {
+            const ordersForDb = deliveredOrders.map(order => ({
+              contact_id: dbContact.id,
+              magazord_order_id: String(order.Id),
+              valor_total: parseFloat(order.ValorTotal) || 0,
+              status: order.Status,
+              data_pedido: order.DataPedido,
+            }));
+
+            const { error: orderUpsertError } = await supabaseAdmin
+              .from('magazord_orders')
+              .upsert(ordersForDb, { onConflict: 'magazord_order_id' });
+            
+            if (orderUpsertError) throw orderUpsertError;
+            logs.push(`${timestamp()} -> ${deliveredOrders.length} pedidos salvos no DB.`);
+          }
+        } else {
+          logs.push(`${timestamp()} -> Aviso: Não foi possível buscar pedidos para ${contact.email} (Status: ${ordersResponse.status}).`);
+        }
+
+        // Atualiza os totais no contato
+        const { error: updateTotalError } = await supabaseAdmin
+          .from('magazord_contacts')
+          .update({
+            total_compras: total_compras,
+            valor_total_gasto: valor_total_gasto,
+          })
+          .eq('id', dbContact.id);
+
+        if (updateTotalError) throw updateTotalError;
 
         await pushToMautic(contact);
         successCount++;
-        logs.push(`${timestamp()} -> Sucesso: Contato salvo no DB e enviado para Mautic (simulação).`);
+        logs.push(`${timestamp()} -> Sucesso: Totais atualizados e enviado para Mautic (simulação).`);
         
         if (processedContactsForPreview.length < 5) {
             processedContactsForPreview.push({ ...contact, total_compras, valor_total_gasto, tags });
@@ -155,7 +184,7 @@ serve(async (req) => {
       }
     }
 
-    const message = `Simulação concluída. Processados: ${contactsToProcess.length}. Salvos no DB: ${successCount}. Falhas: ${errorCount}.`;
+    const message = `Sincronização concluída. Processados: ${contactsToProcess.length}. Sucesso: ${successCount}. Falhas: ${errorCount}.`;
     logs.push(`${timestamp()} ${message}`);
     
     return new Response(
