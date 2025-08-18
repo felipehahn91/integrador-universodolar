@@ -53,7 +53,7 @@ const fetchJobStatus = async (jobId: string) => {
 const fetchLastIncompleteJob = async () => {
   const { data, error } = await supabase
     .from('sync_jobs')
-    .select('id, status')
+    .select('id, status, updated_at')
     .in('status', ['running', 'failed'])
     .order('created_at', { ascending: false })
     .limit(1)
@@ -72,12 +72,27 @@ const Dashboard = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
-  // Check for an incomplete job on component load
   useQuery({
     queryKey: ['last_incomplete_job'],
     queryFn: fetchLastIncompleteJob,
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       if (data && !activeJobId) {
+        // Detect stale 'running' jobs
+        if (data.status === 'running' && data.updated_at) {
+          const lastUpdated = new Date(data.updated_at).getTime();
+          const now = new Date().getTime();
+          const fiveMinutes = 5 * 60 * 1000;
+          if (now - lastUpdated > fiveMinutes) {
+            // Job is stale, mark it as failed so the user can continue
+            await supabase
+              .from('sync_jobs')
+              .update({ status: 'failed' })
+              .eq('id', data.id);
+            // Invalidate to refetch and show the 'Continue' button
+            queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
+            return;
+          }
+        }
         setActiveJobId(data.id);
       }
     }
@@ -157,7 +172,6 @@ const Dashboard = () => {
         const timestamp = `[${new Date().toLocaleTimeString()}]`;
         const logMessage = `${timestamp} ERRO CRÍTICO: A chamada para a função de sincronização falhou. Isso pode ser um timeout ou um problema de rede. Tente continuar a sincronização.`;
         
-        // Update the job in the database to reflect this failure
         await supabase
           .from('sync_jobs')
           .update({ 
@@ -167,7 +181,6 @@ const Dashboard = () => {
           })
           .eq('id', jobIdToUse);
 
-        // Manually trigger a refetch to update the UI immediately
         queryClient.invalidateQueries({ queryKey: ['job_status', jobIdToUse] });
         queryClient.invalidateQueries({ queryKey: ['last_incomplete_job'] });
       }
