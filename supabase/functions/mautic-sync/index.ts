@@ -41,6 +41,10 @@ serve(async (req) => {
       throw new Error("Dados do contato ou status do pedido ausentes.");
     }
 
+    if (!contact.email) {
+      return new Response(JSON.stringify({ success: true, message: `Contato ${contact.magazord_id} pulado por não ter email.` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     const mauticUrl = Deno.env.get('MAUTIC_URL');
     const mauticUsername = Deno.env.get('MAUTIC_USERNAME');
     const mauticPassword = Deno.env.get('MAUTIC_PASSWORD');
@@ -59,12 +63,16 @@ serve(async (req) => {
 
     let mauticContactId: number;
 
+    const nomeCompleto = contact.nome || '';
+    const nomeParts = nomeCompleto.split(' ').filter(Boolean);
+    const firstname = nomeParts[0] || '';
+    const lastname = nomeParts.slice(1).join(' ') || '';
+
     const contactPayload = {
-      firstname: contact.nome?.split(' ')[0] || '',
-      lastname: contact.nome?.split(' ').slice(1).join(' ') || '',
+      firstname: firstname,
+      lastname: lastname,
       email: contact.email,
       idmagazord: contact.magazord_id,
-      overwriteWithBlank: true,
     };
 
     if (searchResult.total > 0) {
@@ -73,14 +81,14 @@ serve(async (req) => {
       const updateResponse = await fetch(updateUrl, { method: 'PATCH', headers, body: JSON.stringify(contactPayload) });
       if (!updateResponse.ok) {
         const errorBody = await updateResponse.text();
-        throw new Error(`Falha ao ATUALIZAR contato no Mautic (ID: ${mauticContactId}). Status: ${updateResponse.status}. Resposta: ${errorBody}`);
+        throw new Error(`Falha ao ATUALIZAR contato no Mautic (ID: ${mauticContactId}). Status: ${updateResponse.status}. Resposta: ${errorBody}. Payload enviado: ${JSON.stringify(contactPayload)}`);
       }
     } else {
       const createUrl = `${mauticUrl}/api/contacts/new`;
       const createResponse = await fetch(createUrl, { method: 'POST', headers, body: JSON.stringify(contactPayload) });
       if (!createResponse.ok) {
         const errorBody = await createResponse.text();
-        throw new Error(`Falha ao CRIAR contato no Mautic. Status: ${createResponse.status}. Resposta: ${errorBody}`);
+        throw new Error(`Falha ao CRIAR contato no Mautic. Status: ${createResponse.status}. Resposta: ${errorBody}. Payload enviado: ${JSON.stringify(contactPayload)}`);
       }
       const createResult = await createResponse.json();
       if (!createResult.contact?.id) throw new Error(`Falha ao criar contato no Mautic (resposta inesperada): ${JSON.stringify(createResult)}`);
