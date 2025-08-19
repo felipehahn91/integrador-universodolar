@@ -18,27 +18,44 @@ serve(async (req) => {
       throw new Error('O intervalo em horas deve ser um número positivo.');
     }
 
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+    const supabaseAdmin = createClient(supabaseUrl, serviceKey);
 
     const jobName = 'regular-sync';
     const cronPattern = `0 */${intervalHours} * * *`;
 
+    // 1. Unschedule existing job
     try {
-      await supabaseAdmin.rpc('cron.unschedule', { job_name: jobName });
+      // This RPC throws an error if the job is not found, so we catch it.
+      const { error: unscheduleError } = await supabaseAdmin.rpc('cron.unschedule', { job_name: jobName });
+      // We only want to throw errors that are not "job not found".
+      if (unscheduleError && !unscheduleError.message.includes('job not found')) {
+        throw unscheduleError;
+      }
     } catch (e) {
-      if (!e.message.includes('job not found')) throw e;
+        // Also catch network or other errors during unschedule
+        if (e.message && !e.message.includes('job not found')) {
+            throw e;
+        }
     }
 
+    // 2. Construct the new command safely
+    const headersJsonString = JSON.stringify({
+      "Content-Type": "application/json",
+      "apikey": serviceKey
+    });
+
+    // Use dollar-quoting ($$) to prevent issues with special characters in the headers
     const command = `
       SELECT net.http_post(
-          url:='${Deno.env.get('SUPABASE_URL')}/functions/v1/incremental-sync',
-          headers:='{"Content-Type": "application/json", "apikey": "${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}"}'
+          url:='${supabaseUrl}/functions/v1/incremental-sync',
+          headers:=${'$$'}${headersJsonString}${'$$'}
       )
     `;
 
+    // 3. Schedule the new job
     const { error: scheduleError } = await supabaseAdmin.rpc('cron.schedule', {
       job_name: jobName,
       schedule: cronPattern,
