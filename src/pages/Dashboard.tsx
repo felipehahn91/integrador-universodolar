@@ -9,8 +9,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Clock, RefreshCw, Users as UsersIcon } from "lucide-react";
-import { showError, showLoading } from "@/utils/toast";
-import { toast } from "sonner";
+import { showError, showLoading, showSuccess } from "@/utils/toast";
 
 const fetchSyncHistory = async () => {
   const { data, error } = await supabase
@@ -50,28 +49,17 @@ const Dashboard = () => {
     const toastId = showLoading("Iniciando sincronização completa...");
 
     try {
-      // Etapa 1: Sincronização incremental de novos contatos
-      toast.loading("Etapa 1/2: Buscando novos contatos...", { id: toastId });
-      const { error: syncError } = await supabase.functions.invoke('incremental-sync');
-      if (syncError) {
-        throw new Error(`Falha ao buscar novos contatos: ${syncError.message}`);
+      const { error } = await supabase.functions.invoke('incremental-sync');
+      if (error) {
+        throw new Error(`Falha na sincronização: ${error.message}`);
       }
 
-      // Etapa 2: Atualização dos status dos pedidos
-      toast.loading("Etapa 2/2: Atualizando status dos pedidos...", { id: toastId });
-      const { error: updateError } = await supabase.functions.invoke('update-order-statuses');
-      if (updateError) {
-        throw new Error(`Falha ao atualizar status dos pedidos: ${updateError.message}`);
-      }
-
-      // Sucesso
-      toast.success("Sincronização completa concluída com sucesso!", { id: toastId });
+      showSuccess("Sincronização completa concluída com sucesso!");
       queryClient.invalidateQueries({ queryKey: ['sync_history'] });
       queryClient.invalidateQueries({ queryKey: ['contact_stats'] });
 
     } catch (error: any) {
       showError(error.message);
-      toast.dismiss(toastId);
     } finally {
       setIsSyncing(false);
     }
@@ -82,6 +70,7 @@ const Dashboard = () => {
       case 'completed': return <Badge variant="default">Concluído</Badge>;
       case 'running': return <Badge variant="secondary">Executando...</Badge>;
       case 'failed': return <Badge variant="destructive">Falhou</Badge>;
+      case 'skipped': return <Badge variant="outline">Pulado</Badge>;
       default: return <Badge variant="outline">{status}</Badge>;
     }
   };
@@ -160,6 +149,7 @@ const Dashboard = () => {
                 <TableHead>Fim</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Novos Contatos</TableHead>
+                <TableHead className="text-right">Pedidos Atualizados</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -170,6 +160,7 @@ const Dashboard = () => {
                     <TableCell><Skeleton className="h-4 w-32" /></TableCell>
                     <TableCell><Skeleton className="h-6 w-24" /></TableCell>
                     <TableCell className="text-right"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                    <TableCell className="text-right"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
                   </TableRow>
                 ))
               ) : syncHistory && syncHistory.length > 0 ? (
@@ -179,11 +170,12 @@ const Dashboard = () => {
                     <TableCell>{job.finished_at ? format(new Date(job.finished_at), "dd/MM/yy HH:mm:ss", { locale: ptBR }) : '—'}</TableCell>
                     <TableCell>{formatStatus(job.status)}</TableCell>
                     <TableCell className="text-right font-medium">{job.new_records_added}</TableCell>
+                    <TableCell className="text-right font-medium">{job.orders_status_updated_count}</TableCell>
                   </TableRow>
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center">Nenhuma sincronização registrada.</TableCell>
+                  <TableCell colSpan={5} className="text-center">Nenhuma sincronização registrada.</TableCell>
                 </TableRow>
               )}
             </TableBody>
