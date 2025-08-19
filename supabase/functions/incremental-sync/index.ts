@@ -15,6 +15,13 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  // Verificação de segurança: Garante que a função foi chamada por um serviço autorizado (como o cron da Supabase)
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    console.error('Chamada não autorizada recebida.');
+    return new Response(JSON.stringify({ success: false, error: 'Acesso não autorizado.' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
   const supabaseAdmin = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -49,8 +56,6 @@ serve(async (req) => {
   const jobId = job.id;
 
   try {
-    // Lógica de validação de token foi REMOVIDA.
-
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
     if (!magazordApiToken || !magazordApiSecret) throw new Error('Credenciais da API Magazord não configuradas.');
