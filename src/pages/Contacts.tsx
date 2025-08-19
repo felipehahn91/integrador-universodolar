@@ -9,6 +9,7 @@ import { Pagination, PaginationContent, PaginationItem, PaginationNext, Paginati
 import { ContactFilters, Filters } from "@/components/pages/contacts/ContactFilters";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { DateRange } from "react-day-picker";
 
 const PAGE_SIZE = 15;
 
@@ -27,6 +28,19 @@ const fetchFilteredContacts = async (page: number, filters: Filters) => {
   if (filters.searchTerm) {
     const searchTerm = filters.searchTerm;
     query = query.or(`nome.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%`);
+  }
+
+  if (filters.personType && filters.personType !== 'all') {
+    query = query.eq('tipo_pessoa', filters.personType);
+  }
+
+  if (filters.dateRange?.from) {
+    query = query.gte('created_at', filters.dateRange.from.toISOString());
+  }
+  if (filters.dateRange?.to) {
+    const toDate = new Date(filters.dateRange.to);
+    toDate.setHours(23, 59, 59, 999); // Inclui o dia todo
+    query = query.lte('created_at', toDate.toISOString());
   }
 
   query = query.order(sortBy, { ascending: sortDirection === 'asc' });
@@ -48,6 +62,8 @@ const Contacts = () => {
   const [filters, setFilters] = useState<Filters>({
     searchTerm: "",
     sortBy: "created_at_desc",
+    personType: "all",
+    dateRange: undefined,
   });
 
   const handleFiltersChange = (newFilters: Partial<Filters>) => {
