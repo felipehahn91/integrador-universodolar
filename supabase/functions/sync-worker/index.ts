@@ -95,7 +95,17 @@ serve(async (req) => {
     }
 
     await appendLogs(supabaseAdmin, jobId, currentLogs);
-    await supabaseAdmin.sql`UPDATE sync_jobs SET new_records_added = new_records_added + ${newRecordsCount}, last_processed_page = ${page} WHERE id = ${jobId}`;
+    
+    const { error: rpcError } = await supabaseAdmin.rpc('increment_job_counts', {
+        p_job_id: jobId,
+        p_new_records: newRecordsCount,
+        p_page_number: page
+    });
+
+    if (rpcError) {
+        console.error(`RPC Error updating job counts for ${jobId}: ${rpcError.message}`);
+        await appendLogs(supabaseAdmin, jobId, [`${timestamp()} AVISO: Falha ao atualizar contagem do job: ${rpcError.message}`]);
+    }
 
     if (!stopSync && page < totalPages) {
       await supabaseAdmin.functions.invoke('sync-worker', {
