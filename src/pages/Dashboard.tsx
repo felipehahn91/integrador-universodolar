@@ -9,7 +9,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Clock, RefreshCw, Users as UsersIcon } from "lucide-react";
-import { showError, showLoading, showSuccess } from "@/utils/toast";
+import { showError, showLoading } from "@/utils/toast";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -49,11 +49,11 @@ const Dashboard = () => {
 
   const handleManualSync = async () => {
     setIsSyncing(true);
-    const toastId = showLoading("Iniciando sincronização completa...");
+    const toastId = showLoading("Iniciando sincronização...");
 
     try {
       const { data, error } = await supabase.functions.invoke('start-sync', {
-        body: { full_sync: true }
+        body: { full_sync: false }
       });
       if (error) {
         throw new Error(`Falha na sincronização: ${error.message}`);
