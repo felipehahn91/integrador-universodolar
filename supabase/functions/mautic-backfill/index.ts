@@ -49,6 +49,10 @@ serve(async (req) => {
 
     logs.push(`${timestamp()} ${contacts.length} contatos encontrados. Sincronizando com Mautic...`);
     let processedCount = 0;
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const mauticSyncUrl = `${supabaseUrl}/functions/v1/mautic-sync`;
+
     for (const contact of contacts) {
       const { data: latestOrder, error: orderError } = await supabaseAdmin.from('magazord_orders').select('status').eq('contact_id', contact.id).order('data_pedido', { ascending: false }).limit(1).single();
       if (orderError) {
@@ -57,14 +61,26 @@ serve(async (req) => {
       }
 
       if (latestOrder) {
-        const { data: mauticData, error: mauticError } = await supabaseAdmin.functions.invoke('mautic-sync', { body: { contact: contact, orderStatus: latestOrder.status } });
-        
-        if (mauticError) {
-          // Alteração aqui: Capturando a mensagem de erro direta, que é mais informativa.
-          const detailedErrorMessage = mauticError.message || JSON.stringify(mauticError);
-          logs.push(`${timestamp()}  - ERRO ao sincronizar ${contact.email}: ${detailedErrorMessage}`);
-        } else {
-          logs.push(`${timestamp()}  - Sucesso: ${contact.email} - ${mauticData.message}`);
+        try {
+            const response = await fetch(mauticSyncUrl, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${serviceRoleKey}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ contact: contact, orderStatus: latestOrder.status })
+            });
+
+            const responseData = await response.json();
+
+            if (!response.ok) {
+                const errorMessage = responseData.error?.message || JSON.stringify(responseData);
+                logs.push(`${timestamp()}  - ERRO ao sincronizar ${contact.email}: ${errorMessage}`);
+            } else {
+                logs.push(`${timestamp()}  - Sucesso: ${contact.email} - ${responseData.message}`);
+            }
+        } catch (fetchError) {
+            logs.push(`${timestamp()}  - ERRO DE REDE ao chamar mautic-sync para ${contact.email}: ${fetchError.message}`);
         }
         processedCount++;
       }
