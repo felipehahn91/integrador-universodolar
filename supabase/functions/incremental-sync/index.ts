@@ -69,42 +69,67 @@ serve(async (req) => {
     let currentLogs: string[] = [`${timestamp()} Etapa 1: Buscando novos contatos...`];
     
     while (!stopSync) {
-      currentLogs.push(`${timestamp()} Buscando contatos na página ${currentPage} da Magazord.`);
       const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa?page=${currentPage}&orderBy=id&orderDirection=desc&limit=${PAGE_LIMIT}`;
       const contactsResponse = await fetch(contactsEndpoint, { headers: { 'Authorization': authHeaderMagazord } });
       if (!contactsResponse.ok) throw new Error(`Falha na API da Magazord na página ${currentPage} com status ${contactsResponse.status}`);
       const result = await contactsResponse.json();
       const rawContacts = result.data?.items || [];
+      
       if (rawContacts.length === 0) {
         currentLogs.push(`${timestamp()} Nenhuma novo contato encontrado.`);
         stopSync = true;
         continue;
       }
 
-      for (const contact of rawContacts) {
-        const { data: existingContact } = await supabaseAdmin.from('magazord_contacts').select('id').eq('magazord_id', String(contact.id)).maybeSingle();
-        if (existingContact && !full_sync) {
-          currentLogs.push(`${timestamp()} Contato ${contact.id} já existe. Encerrando busca incremental.`);
-          stopSync = true;
-          break;
-        }
-        if (existingContact && full_sync) {
-          continue; // Em sync completo, apenas pula os existentes
-        }
+      if (full_sync) {
+        // Lógica otimizada para Sincronização Completa
+        currentLogs.push(`${timestamp()} [Full Sync] Buscando contatos na página ${currentPage}.`);
+        const contactIds = rawContacts.map(c => String(c.id));
+        const { data: existingDbContacts, error: dbError } = await supabaseAdmin.from('magazord_contacts').select('magazord_id').in('magazord_id', contactIds);
+        if (dbError) { currentLogs.push(`${timestamp()} ERRO ao verificar contatos existentes: ${dbError.message}`); }
+        
+        const existingIds = new Set(existingDbContacts?.map(c => c.magazord_id) || []);
+        const newContacts = rawContacts.filter(c => !existingIds.has(String(c.id)));
 
-        currentLogs.push(`${timestamp()} Novo contato encontrado: ${contact.nome} (ID: ${contact.id}). Inserindo...`);
-        const contactData = { nome: contact.nome, email: contact.email, cpf_cnpj: contact.cpfCnpj, tipo_pessoa: contact.tipo === 1 ? 'F' : (contact.tipo === 2 ? 'J' : null), sexo: contact.sexo, magazord_id: String(contact.id), telefone: contact.pessoaContato?.[0]?.contato || null };
-        const { data: newContact, error: insertError } = await supabaseAdmin.from('magazord_contacts').insert(contactData).select('id, cpf_cnpj, magazord_id, nome, email').single();
-        if (insertError) {
-          currentLogs.push(`${timestamp()} ERRO ao inserir contato ${contact.id}: ${insertError.message}`);
-          continue;
+        if (newContacts.length === 0) {
+          currentLogs.push(`${timestamp()} Nenhum contato novo nesta página. Todos os ${rawContacts.length} já existem.`);
+        } else {
+          currentLogs.push(`${timestamp()} Encontrados ${newContacts.length} novos contatos. Inserindo...`);
+          const contactsToInsert = newContacts.map(contact => ({
+            nome: contact.nome, email: contact.email, cpf_cnpj: contact.cpfCnpj,
+            tipo_pessoa: contact.tipo === 1 ? 'F' : (contact.tipo === 2 ? 'J' : null),
+            sexo: contact.sexo, magazord_id: String(contact.id),
+            telefone: contact.pessoaContato?.[0]?.contato || null
+          }));
+          const { error: insertError } = await supabaseAdmin.from('magazord_contacts').insert(contactsToInsert);
+          if (insertError) {
+            currentLogs.push(`${timestamp()} ERRO ao inserir contatos em lote: ${insertError.message}`);
+          } else {
+            newRecordsCount += newContacts.length;
+            currentLogs.push(`${timestamp()} ${newContacts.length} contatos inseridos com sucesso.`);
+          }
         }
-        newRecordsCount++;
-
-        if (newContact?.cpf_cnpj) {
-          // ... (código de busca de pedidos e chamada ao mautic) ...
+      } else {
+        // Lógica original (um a um) para Sincronização Incremental
+        currentLogs.push(`${timestamp()} [Incremental Sync] Buscando contatos na página ${currentPage}.`);
+        for (const contact of rawContacts) {
+          const { data: existingContact } = await supabaseAdmin.from('magazord_contacts').select('id').eq('magazord_id', String(contact.id)).maybeSingle();
+          if (existingContact) {
+            currentLogs.push(`${timestamp()} Contato ${contact.id} já existe. Encerrando busca incremental.`);
+            stopSync = true;
+            break;
+          }
+          currentLogs.push(`${timestamp()} Novo contato encontrado: ${contact.nome} (ID: ${contact.id}). Inserindo...`);
+          const contactData = { nome: contact.nome, email: contact.email, cpf_cnpj: contact.cpfCnpj, tipo_pessoa: contact.tipo === 1 ? 'F' : (contact.tipo === 2 ? 'J' : null), sexo: contact.sexo, magazord_id: String(contact.id), telefone: contact.pessoaContato?.[0]?.contato || null };
+          const { error: insertError } = await supabaseAdmin.from('magazord_contacts').insert(contactData);
+          if (insertError) {
+            currentLogs.push(`${timestamp()} ERRO ao inserir contato ${contact.id}: ${insertError.message}`);
+            continue;
+          }
+          newRecordsCount++;
         }
       }
+
       await appendLogs(jobId, currentLogs);
       currentLogs = [];
       if (!stopSync) currentPage++;
