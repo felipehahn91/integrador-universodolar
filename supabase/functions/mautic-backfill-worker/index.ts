@@ -100,7 +100,7 @@ serve(async (req) => {
         try {
           const newTag = latestOrder ? getMauticTagForStatus(latestOrder.status) : null;
 
-          const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
+          const searchUrl = `${mauticUrl}/api/contacts?search=email:${encodeURIComponent(contact.email)}`;
           const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
           if (!searchResponse.ok) {
             const errorBody = await searchResponse.text();

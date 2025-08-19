@@ -132,7 +132,7 @@ serve(async (req) => {
           if (newTag) contactPayload.tags = [newTag];
 
           try {
-            const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
+            const searchUrl = `${mauticUrl}/api/contacts?search=email:${encodeURIComponent(contact.email)}`;
             const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
             if (!searchResponse.ok) {
                 const errorBody = await searchResponse.text();
