@@ -124,14 +124,26 @@ serve(async (req) => {
       
       // Sincronização com Mautic em lote
       const validContacts = contactsToProcess.filter(c => c.email);
-      const emailsToSearch = validContacts.map(c => c.email);
       
-      const searchUrl = `${mauticUrl}/api/contacts?search=${emailsToSearch.map(e => `email:${encodeURIComponent(e)}`).join(' or ')}&limit=${validContacts.length}`;
-      const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
-      if (!searchResponse.ok) throw new Error(`Falha ao buscar contatos em lote no Mautic: ${await searchResponse.text()}`);
-      const searchResult = await searchResponse.json();
-      
-      const existingMauticContacts = new Map(Object.values(searchResult.contacts || {}).map((c: any) => [c.fields.core.email.value, c.id]));
+      const existingMauticContacts = new Map<string, number>();
+      const MAUTIC_SEARCH_CHUNK_SIZE = 10; // Search 10 emails at a time
+
+      for (let i = 0; i < validContacts.length; i += MAUTIC_SEARCH_CHUNK_SIZE) {
+        const chunk = validContacts.slice(i, i + MAUTIC_SEARCH_CHUNK_SIZE);
+        const emailsToSearch = chunk.map(c => c.email);
+        
+        const searchUrl = `${mauticUrl}/api/contacts?search=${emailsToSearch.map(e => `email:${encodeURIComponent(e)}`).join(' or ')}&limit=${chunk.length}`;
+        const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
+        if (!searchResponse.ok) {
+            const errorText = await searchResponse.text();
+            throw new Error(`Falha ao buscar contatos em lote no Mautic: ${errorText}`);
+        }
+        const searchResult = await searchResponse.json();
+        
+        Object.values(searchResult.contacts || {}).forEach((c: any) => {
+            existingMauticContacts.set(c.fields.core.email.value, c.id);
+        });
+      }
       
       const contactsToCreate = [];
       const contactsToUpdate: { [key: string]: any } = {};
