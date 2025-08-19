@@ -15,30 +15,12 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
-  // NOTA: A verificação de autorização foi temporariamente removida para depurar o cron job.
-  // A segurança será restaurada assim que o problema for identificado.
-
   const supabaseAdmin = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
 
-  // Trava de segurança: verifica se já existe uma sincronização em andamento.
-  const { data: runningJobs, error: runningJobsError } = await supabaseAdmin
-    .from('sync_jobs')
-    .select('id')
-    .eq('status', 'running');
-
-  if (runningJobsError) {
-    console.error('Erro ao verificar jobs em andamento:', runningJobsError);
-    return new Response(JSON.stringify({ success: false, error: 'Não foi possível verificar jobs em andamento.' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-
-  if (runningJobs && runningJobs.length > 0) {
-    console.log('Sincronização já em progresso. Pulando esta execução.');
-    return new Response(JSON.stringify({ success: true, message: 'Sincronização já em progresso. Ignorado.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-
+  // Etapa 1: Criar um registro de job imediatamente para rastrear esta execução.
   const { data: job, error: createJobError } = await supabaseAdmin
     .from('sync_jobs')
     .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização iniciada.`] })
@@ -47,11 +29,39 @@ serve(async (req) => {
 
   if (createJobError) {
     console.error('Falha CRÍTICA ao criar o registro do job:', createJobError);
+    // Se não conseguirmos nem criar o registro, não há nada que possamos fazer.
     return new Response(JSON.stringify({ success: false, error: 'Falha ao iniciar o job.' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
   const jobId = job.id;
 
   try {
+    // Etapa 2: Verificar se já existe outra sincronização em andamento.
+    const { data: runningJobs, error: runningJobsError } = await supabaseAdmin
+      .from('sync_jobs')
+      .select('id')
+      .eq('status', 'running')
+      .neq('id', jobId); // Exclui o job que acabamos de criar.
+
+    if (runningJobsError) {
+      throw new Error(`Erro ao verificar jobs em andamento: ${runningJobsError.message}`);
+    }
+
+    if (runningJobs && runningJobs.length > 0) {
+      // Se outro job estiver rodando, marcamos este como 'pulado' e saímos.
+      await supabaseAdmin
+        .from('sync_jobs')
+        .update({ 
+          status: 'skipped', 
+          finished_at: new Date().toISOString(),
+          logs: [`${timestamp()} Pulado: outra sincronização já estava em andamento.`]
+        })
+        .eq('id', jobId);
+      
+      console.log('Sincronização já em progresso. Pulando esta execução.');
+      return new Response(JSON.stringify({ success: true, message: 'Sincronização já em progresso. Ignorado.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // Etapa 3: Prossiga com a sincronização normal.
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
     if (!magazordApiToken || !magazordApiSecret) throw new Error('Credenciais da API Magazord não configuradas.');
