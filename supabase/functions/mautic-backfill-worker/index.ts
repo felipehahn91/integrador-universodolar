@@ -141,17 +141,12 @@ serve(async (req) => {
             mauticContactId = createResult.contact.id;
           }
 
-          // Manage tags
+          // Manage tags - ONLY ADD, DO NOT REMOVE
           const newTag = getMauticTagForStatus(latestOrder.status);
           if (newTag) {
-            const tagsToRemove = ALL_STATUS_TAGS.filter(t => t !== newTag);
-            if (tagsToRemove.length > 0) {
-              const removeUrl = `${mauticUrl}/api/contacts/${mauticContactId}/tags/remove`;
-              await fetch(removeUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify({ tags: tagsToRemove }) });
-            }
             const addUrl = `${mauticUrl}/api/contacts/${mauticContactId}/tags/add`;
             await fetch(addUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify({ tags: [newTag] }) });
-            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) atualizado com a tag ${newTag}.`);
+            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) adicionada a tag ${newTag}.`);
           } else {
             logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) criado/atualizado. Status do pedido '${latestOrder.status}' ignorado.`);
           }
@@ -181,6 +176,6 @@ serve(async (req) => {
     const finalLog = `${timestamp()} ERRO FATAL no lote ${page}: ${error.message}`;
     await supabaseAdmin.from('sync_jobs').update({ status: 'failed', finished_at: new Date().toISOString() }).eq('id', jobId);
     await appendLogs(jobId, [finalLog]);
-    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Tfype': 'application/json' } });
   }
 })
