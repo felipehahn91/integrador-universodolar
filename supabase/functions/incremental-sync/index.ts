@@ -14,30 +14,58 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
-  const cronSecret = Deno.env.get('CRON_SECRET');
-  const requestSecret = req.headers.get('x-cron-secret');
-  if (!cronSecret || requestSecret !== cronSecret) {
-    return new Response(JSON.stringify({ success: false, error: 'Não autorizado.' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-
-  const supabaseAdmin = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-  );
-
-  const { data: job, error: createJobError } = await supabaseAdmin
-    .from('sync_jobs')
-    .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização iniciada.`] })
-    .select('id')
-    .single();
-
-  if (createJobError) {
-    console.error('Falha CRÍTICA ao criar o registro do job:', createJobError);
-    return new Response(JSON.stringify({ success: false, error: 'Falha ao iniciar o job.' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-  const jobId = job.id;
+  let jobId: string | null = null;
 
   try {
+    // --- Authorization Check ---
+    const authHeader = req.headers.get('Authorization');
+    const cronSecretHeader = req.headers.get('x-cron-secret');
+    const cronSecretEnv = Deno.env.get('CRON_SECRET');
+
+    let authorized = false;
+
+    // Option 1: Valid Cron Secret for automated runs
+    if (cronSecretEnv && cronSecretHeader === cronSecretEnv) {
+      authorized = true;
+    }
+
+    // Option 2: Valid JWT from an authenticated user for manual runs
+    if (!authorized && authHeader) {
+      try {
+        const supabaseClient = createClient(
+          Deno.env.get('SUPABASE_URL') ?? '',
+          Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+          { global: { headers: { Authorization: authHeader } } }
+        );
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (user) {
+          authorized = true;
+        }
+      } catch (e) {
+        console.error('JWT validation error:', e.message);
+      }
+    }
+
+    if (!authorized) {
+      return new Response(JSON.stringify({ success: false, error: 'Não autorizado.' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+    
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+
+    const { data: jobData, error: createJobError } = await supabaseAdmin
+      .from('sync_jobs')
+      .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização iniciada.`] })
+      .select('id')
+      .single();
+
+    if (createJobError || !jobData) {
+      throw new Error(createJobError?.message || 'Falha ao criar o registro do job.');
+    }
+    jobId = jobData.id;
+
     const { data: runningJobs } = await supabaseAdmin
       .from('sync_jobs')
       .select('id')
@@ -55,7 +83,7 @@ serve(async (req) => {
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
     if (!magazordApiToken || !magazordApiSecret) throw new Error('Credenciais da API Magazord não configuradas.');
-    const authHeader = `Basic ${btoa(`${magazordApiToken}:${magazordApiSecret}`)}`;
+    const authHeaderMagazord = `Basic ${btoa(`${magazordApiToken}:${magazordApiSecret}`)}`;
     const magazordBaseUrl = 'https://expresso10.painel.magazord.com.br/api';
 
     // --- Etapa 1: Sincronizar Novos Contatos ---
@@ -65,7 +93,7 @@ serve(async (req) => {
 
     while (!stopSync) {
       const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa?page=${currentPage}&orderBy=id&orderDirection=desc&limit=${PAGE_LIMIT}`;
-      const contactsResponse = await fetch(contactsEndpoint, { headers: { 'Authorization': authHeader } });
+      const contactsResponse = await fetch(contactsEndpoint, { headers: { 'Authorization': authHeaderMagazord } });
       if (!contactsResponse.ok) throw new Error(`Falha na API da Magazord na página ${currentPage} com status ${contactsResponse.status}`);
       
       const result = await contactsResponse.json();
@@ -94,7 +122,7 @@ serve(async (req) => {
         if (newContact?.cpf_cnpj) {
           try {
             const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?cpfCnpj=${newContact.cpf_cnpj}`;
-            const ordersResponse = await fetch(ordersEndpoint, { headers: { 'Authorization': authHeader } });
+            const ordersResponse = await fetch(ordersEndpoint, { headers: { 'Authorization': authHeaderMagazord } });
             if (ordersResponse.ok) {
               const ordersResult = await ordersResponse.json();
               const orders = ordersResult.data?.items || [];
@@ -124,7 +152,7 @@ serve(async (req) => {
       for (const order of ordersToUpdate) {
         try {
           const orderEndpoint = `${magazordBaseUrl}/v2/site/pedido/${order.magazord_order_id}`;
-          const response = await fetch(orderEndpoint, { headers: { 'Authorization': authHeader } });
+          const response = await fetch(orderEndpoint, { headers: { 'Authorization': authHeaderMagazord } });
           if (!response.ok) continue;
           const result = await response.json();
           const orderDetails = result.data;
@@ -155,7 +183,13 @@ serve(async (req) => {
 
   } catch (error) {
     const errorMessage = `${timestamp()} ERRO: ${error.message}`;
-    await supabaseAdmin.from('sync_jobs').update({ status: 'failed', finished_at: new Date().toISOString(), logs: [errorMessage] }).eq('id', jobId);
+    if (jobId) {
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL') ?? '',
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      );
+      await supabaseAdmin.from('sync_jobs').update({ status: 'failed', finished_at: new Date().toISOString(), logs: [errorMessage] }).eq('id', jobId);
+    }
     return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 })
