@@ -1,14 +1,12 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate } from "react-router-dom";
 import { Pagination, PaginationContent, PaginationItem, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { ContactFilters, Filters } from "@/components/pages/contacts/ContactFilters";
-import { StatsCards } from "@/components/pages/contacts/StatsCards";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -16,23 +14,25 @@ const PAGE_SIZE = 15;
 
 const fetchFilteredContacts = async (page: number, filters: Filters) => {
   const [sortBy, sortDirection] = filters.sortBy.split('_');
-  
-  const { data, error } = await supabase.functions.invoke('search-contacts-edge', {
-    body: {
-      p_search_term: filters.searchTerm || null,
-      p_order_status_id: filters.orderStatus === 'all' ? null : Number(filters.orderStatus),
-      p_has_orders: filters.hasOrders,
-      p_sort_by: sortBy,
-      p_sort_direction: sortDirection,
-      p_page_number: page,
-      p_page_size: PAGE_SIZE
-    }
-  });
+  const from = (page - 1) * PAGE_SIZE;
+  const to = from + PAGE_SIZE - 1;
 
-  if (error) throw new Error(`Erro na Edge Function: ${error.message}`);
-  if (data.error) throw new Error(`Erro na busca: ${data.error}`);
+  let query = supabase
+    .from('magazord_contacts')
+    .select('id, nome, email, created_at, valor_total_gasto', { count: 'exact' });
+
+  if (filters.searchTerm) {
+    query = query.or(`nome.ilike.%${filters.searchTerm}%,email.ilike.%${filters.searchTerm}%`);
+  }
+
+  query = query.order(sortBy, { ascending: sortDirection === 'asc' });
+  query = query.range(from, to);
+
+  const { data, error, count } = await query;
+
+  if (error) throw new Error(`Erro na busca: ${error.message}`);
   
-  return data;
+  return { contacts: data, count };
 };
 
 const Contacts = () => {
@@ -40,8 +40,6 @@ const Contacts = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [filters, setFilters] = useState<Filters>({
     searchTerm: "",
-    orderStatus: "all",
-    hasOrders: false,
     sortBy: "created_at_desc",
   });
 
@@ -57,13 +55,11 @@ const Contacts = () => {
   });
 
   const contacts = data?.contacts;
-  const stats = data?.stats;
   const totalContacts = data?.count ?? 0;
   const totalPages = Math.ceil(totalContacts / PAGE_SIZE);
 
   return (
     <div className="space-y-6">
-      <StatsCards stats={stats} isLoading={isLoading} />
       <Card>
         <CardHeader>
           <CardTitle>Contatos Sincronizados</CardTitle>
@@ -76,7 +72,7 @@ const Contacts = () => {
               <TableRow>
                 <TableHead>Nome</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>Último Pedido</TableHead>
+                <TableHead>Data de Cadastro</TableHead>
                 <TableHead className="text-right">Total Gasto</TableHead>
               </TableRow>
             </TableHeader>
@@ -100,7 +96,7 @@ const Contacts = () => {
                     <TableCell>{contact.nome}</TableCell>
                     <TableCell>{contact.email}</TableCell>
                     <TableCell>
-                      {contact.last_order_date ? format(new Date(contact.last_order_date), "dd/MM/yyyy", { locale: ptBR }) : '—'}
+                      {contact.created_at ? format(new Date(contact.created_at), "dd/MM/yyyy", { locale: ptBR }) : '—'}
                     </TableCell>
                     <TableCell className="text-right">
                       {Number(contact.valor_total_gasto).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
