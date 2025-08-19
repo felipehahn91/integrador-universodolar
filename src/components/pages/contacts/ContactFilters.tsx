@@ -60,6 +60,8 @@ export const ContactFilters = ({ filters, onFiltersChange }: ContactFiltersProps
         <SelectContent>
           <SelectItem value="created_at_desc">Mais Recentes</SelectItem>
           <SelectItem value="created_at_asc">Mais Antigos</SelectItem>
+          <SelectItem value="valor_total_gasto_desc">Maior Valor Gasto</SelectItem>
+          <SelectItem value="valor_total_gasto_asc">Menor Valor Gasto</SelectItem>
         </SelectContent>
       </Select>
     </div>
