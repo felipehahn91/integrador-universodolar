@@ -53,7 +53,6 @@ serve(async (req) => {
     const authHeader = `Basic ${btoa(authString)}`;
     const headers = { 'Authorization': authHeader, 'Content-Type': 'application/json' };
 
-    // 1. Encontrar ou atualizar o contato no Mautic usando 'idmagazord'
     const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
     const searchResponse = await fetch(searchUrl, { headers });
     const searchResult = await searchResponse.json();
@@ -70,19 +69,24 @@ serve(async (req) => {
 
     if (searchResult.total > 0) {
       mauticContactId = Object.keys(searchResult.contacts)[0];
-      // Contato existe, vamos atualizá-lo
       const updateUrl = `${mauticUrl}/api/contacts/${mauticContactId}/edit`;
-      await fetch(updateUrl, { method: 'PATCH', headers, body: JSON.stringify(contactPayload) });
+      const updateResponse = await fetch(updateUrl, { method: 'PATCH', headers, body: JSON.stringify(contactPayload) });
+      if (!updateResponse.ok) {
+        const errorBody = await updateResponse.text();
+        throw new Error(`Falha ao ATUALIZAR contato no Mautic (ID: ${mauticContactId}). Status: ${updateResponse.status}. Resposta: ${errorBody}`);
+      }
     } else {
-      // Contato não existe, vamos criá-lo
       const createUrl = `${mauticUrl}/api/contacts/new`;
       const createResponse = await fetch(createUrl, { method: 'POST', headers, body: JSON.stringify(contactPayload) });
+      if (!createResponse.ok) {
+        const errorBody = await createResponse.text();
+        throw new Error(`Falha ao CRIAR contato no Mautic. Status: ${createResponse.status}. Resposta: ${errorBody}`);
+      }
       const createResult = await createResponse.json();
-      if (!createResult.contact?.id) throw new Error(`Falha ao criar contato no Mautic: ${JSON.stringify(createResult)}`);
+      if (!createResult.contact?.id) throw new Error(`Falha ao criar contato no Mautic (resposta inesperada): ${JSON.stringify(createResult)}`);
       mauticContactId = createResult.contact.id;
     }
 
-    // 2. Gerenciar as tags
     const newTag = getMauticTagForStatus(orderStatus);
     if (!newTag) {
       return new Response(JSON.stringify({ success: true, message: `Status '${orderStatus}' ignorado.` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -91,11 +95,19 @@ serve(async (req) => {
     const tagsToRemove = ALL_STATUS_TAGS.filter(t => t !== newTag);
     if (tagsToRemove.length > 0) {
       const removeUrl = `${mauticUrl}/api/contacts/${mauticContactId}/tags/remove`;
-      await fetch(removeUrl, { method: 'POST', headers, body: JSON.stringify({ tags: tagsToRemove }) });
+      const removeResponse = await fetch(removeUrl, { method: 'POST', headers, body: JSON.stringify({ tags: tagsToRemove }) });
+      if (!removeResponse.ok) {
+        const errorBody = await removeResponse.text();
+        throw new Error(`Falha ao REMOVER tags do contato ${mauticContactId}. Status: ${removeResponse.status}. Resposta: ${errorBody}`);
+      }
     }
 
     const addUrl = `${mauticUrl}/api/contacts/${mauticContactId}/tags/add`;
-    await fetch(addUrl, { method: 'POST', headers, body: JSON.stringify({ tags: [newTag] }) });
+    const addResponse = await fetch(addUrl, { method: 'POST', headers, body: JSON.stringify({ tags: [newTag] }) });
+    if (!addResponse.ok) {
+      const errorBody = await addResponse.text();
+      throw new Error(`Falha ao ADICIONAR tag ao contato ${mauticContactId}. Status: ${addResponse.status}. Resposta: ${errorBody}`);
+    }
 
     return new Response(
       JSON.stringify({ success: true, message: `Contato ${mauticContactId} atualizado com a tag ${newTag}.` }),
@@ -103,7 +115,7 @@ serve(async (req) => {
     )
   } catch (error) {
     return new Response(
-      JSON.stringify({ success: false, error: error.message }),
+      JSON.stringify({ success: false, error: { message: error.message } }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }

@@ -4,11 +4,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Calendar, CheckCircle, Clock, XCircle } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle, Clock, XCircle, Ban } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { showError, showLoading, showSuccess } from "@/utils/toast";
 
 const fetchJobDetails = async (jobId: string) => {
   const { data, error } = await supabase
@@ -24,6 +25,7 @@ const SyncJobDetails = () => {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [isCancelling, setIsCancelling] = useState(false);
 
   const { data: job, isLoading } = useQuery({
     queryKey: ["sync_job_details", jobId],
@@ -33,50 +35,63 @@ const SyncJobDetails = () => {
 
   useEffect(() => {
     if (!jobId) return;
-
     const channel = supabase
       .channel(`sync_job_details_${jobId}`)
       .on(
         'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'sync_jobs',
-          filter: `id=eq.${jobId}`,
-        },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ["sync_job_details", jobId] });
-        }
+        { event: 'UPDATE', schema: 'public', table: 'sync_jobs', filter: `id=eq.${jobId}` },
+        () => { queryClient.invalidateQueries({ queryKey: ["sync_job_details", jobId] }); }
       )
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [jobId, queryClient]);
+
+  const handleCancelJob = async () => {
+    if (!jobId) return;
+    setIsCancelling(true);
+    const toastId = showLoading("Cancelando a tarefa...");
+    try {
+      const { error } = await supabase.functions.invoke('cancel-sync-job', { body: { jobId } });
+      if (error) throw error;
+      showSuccess("Sinal de cancelamento enviado. A tarefa irá parar em breve.", { id: toastId });
+      queryClient.invalidateQueries({ queryKey: ["sync_job_details", jobId] });
+    } catch (error: any) {
+      showError(`Falha ao cancelar: ${error.message}`, { id: toastId });
+    } finally {
+      setIsCancelling(false);
+    }
+  };
 
   const formatStatus = (status: string) => {
     switch (status) {
       case 'completed': return <Badge variant="default"><CheckCircle className="mr-2 h-4 w-4" />Concluído</Badge>;
       case 'running': return <Badge variant="secondary"><Clock className="mr-2 h-4 w-4 animate-spin" />Executando...</Badge>;
       case 'failed': return <Badge variant="destructive"><XCircle className="mr-2 h-4 w-4" />Falhou</Badge>;
+      case 'cancelled': return <Badge variant="outline"><Ban className="mr-2 h-4 w-4" />Cancelado</Badge>;
       default: return <Badge variant="outline">{status}</Badge>;
     }
   };
 
   return (
     <div className="space-y-6">
-      <Button variant="outline" size="sm" onClick={() => navigate(-1)}>
-        <ArrowLeft className="mr-2 h-4 w-4" />
-        Voltar para o Histórico
-      </Button>
+      <div className="flex items-center justify-between">
+        <Button variant="outline" size="sm" onClick={() => navigate(-1)}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Voltar para o Histórico
+        </Button>
+        {job?.status === 'running' && (
+          <Button variant="destructive" size="sm" onClick={handleCancelJob} disabled={isCancelling}>
+            <Ban className="mr-2 h-4 w-4" />
+            {isCancelling ? "Cancelando..." : "Parar Sincronização"}
+          </Button>
+        )}
+      </div>
 
       <Card>
         <CardHeader>
           {isLoading ? (
             <div className="space-y-2">
-              <Skeleton className="h-8 w-1/2" />
-              <Skeleton className="h-4 w-1/3" />
+              <Skeleton className="h-8 w-1/2" /><Skeleton className="h-4 w-1/3" />
             </div>
           ) : (
             <>
@@ -87,56 +102,25 @@ const SyncJobDetails = () => {
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <div className="grid grid-cols-2 gap-4">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-            </div>
+            <div className="grid grid-cols-2 gap-4"><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /><Skeleton className="h-10 w-full" /></div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-6">
-              <div>
-                <p className="font-medium">Status</p>
-                <div className="mt-1">{formatStatus(job?.status)}</div>
-              </div>
-              <div>
-                <p className="font-medium">Início</p>
-                <p className="text-muted-foreground flex items-center mt-1">
-                  <Calendar className="mr-2 h-4 w-4" />
-                  {job?.created_at ? format(new Date(job.created_at), "dd/MM/yy HH:mm:ss", { locale: ptBR }) : '—'}
-                </p>
-              </div>
-              <div>
-                <p className="font-medium">Fim</p>
-                <p className="text-muted-foreground flex items-center mt-1">
-                  <Calendar className="mr-2 h-4 w-4" />
-                  {job?.finished_at ? format(new Date(job.finished_at), "dd/MM/yy HH:mm:ss", { locale: ptBR }) : '—'}
-                </p>
-              </div>
+              <div><p className="font-medium">Status</p><div className="mt-1">{formatStatus(job?.status)}</div></div>
+              <div><p className="font-medium">Início</p><p className="text-muted-foreground flex items-center mt-1"><Calendar className="mr-2 h-4 w-4" />{job?.created_at ? format(new Date(job.created_at), "dd/MM/yy HH:mm:ss", { locale: ptBR }) : '—'}</p></div>
+              <div><p className="font-medium">Fim</p><p className="text-muted-foreground flex items-center mt-1"><Calendar className="mr-2 h-4 w-4" />{job?.finished_at ? format(new Date(job.finished_at), "dd/MM/yy HH:mm:ss", { locale: ptBR }) : '—'}</p></div>
             </div>
           )}
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Logs</CardTitle>
-          <CardDescription>Registro detalhado de eventos da sincronização.</CardDescription>
-        </CardHeader>
+        <CardHeader><CardTitle>Logs</CardTitle><CardDescription>Registro detalhado de eventos da sincronização.</CardDescription></CardHeader>
         <CardContent>
           {isLoading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-6 w-full" />
-              <Skeleton className="h-6 w-full" />
-              <Skeleton className="h-6 w-5/6" />
-            </div>
+            <div className="space-y-2"><Skeleton className="h-6 w-full" /><Skeleton className="h-6 w-full" /><Skeleton className="h-6 w-5/6" /></div>
           ) : (
             <div className="bg-muted/50 p-4 rounded-lg font-mono text-sm max-h-96 overflow-y-auto">
-              {job?.logs && job.logs.length > 0 ? (
-                job.logs.map((log, index) => <p key={index}>{log}</p>)
-              ) : (
-                <p>Nenhum log registrado para este job.</p>
-              )}
+              {job?.logs && job.logs.length > 0 ? (job.logs.map((log, index) => <p key={index}>{log}</p>)) : (<p>Nenhum log registrado para este job.</p>)}
             </div>
           )}
         </CardContent>
