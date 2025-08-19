@@ -13,7 +13,10 @@ import { ptBR } from "date-fns/locale";
 const PAGE_SIZE = 15;
 
 const fetchFilteredContacts = async (page: number, filters: Filters) => {
-  const [sortBy, sortDirection] = filters.sortBy.split('_');
+  const lastUnderscoreIndex = filters.sortBy.lastIndexOf('_');
+  const sortBy = filters.sortBy.substring(0, lastUnderscoreIndex);
+  const sortDirection = filters.sortBy.substring(lastUnderscoreIndex + 1);
+  
   const from = (page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
