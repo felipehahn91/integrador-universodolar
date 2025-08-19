@@ -70,9 +70,17 @@ const Settings = () => {
     let jobId = null;
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Usuário não autenticado.");
+
       const { data: jobData, error: createError } = await supabase
         .from('sync_jobs')
-        .insert({ status: 'running', full_sync: true, logs: [`[${new Date().toLocaleTimeString()}] Tarefa manual '${jobName}' iniciada.`] })
+        .insert({ 
+          user_id: user.id,
+          status: 'running', 
+          full_sync: true, 
+          logs: [`[${new Date().toLocaleTimeString()}] Tarefa manual '${jobName}' iniciada.`] 
+        })
         .select('id')
         .single();
 

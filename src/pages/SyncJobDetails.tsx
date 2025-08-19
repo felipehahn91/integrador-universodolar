@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,6 +8,7 @@ import { ArrowLeft, Calendar, CheckCircle, Clock, XCircle } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
+import { useEffect } from "react";
 
 const fetchJobDetails = async (jobId: string) => {
   const { data, error } = await supabase
@@ -22,12 +23,37 @@ const fetchJobDetails = async (jobId: string) => {
 const SyncJobDetails = () => {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const { data: job, isLoading } = useQuery({
     queryKey: ["sync_job_details", jobId],
     queryFn: () => fetchJobDetails(jobId!),
     enabled: !!jobId,
   });
+
+  useEffect(() => {
+    if (!jobId) return;
+
+    const channel = supabase
+      .channel(`sync_job_details_${jobId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'sync_jobs',
+          filter: `id=eq.${jobId}`,
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["sync_job_details", jobId] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [jobId, queryClient]);
 
   const formatStatus = (status: string) => {
     switch (status) {
