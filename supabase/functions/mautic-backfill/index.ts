@@ -6,28 +6,34 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const BATCH_SIZE = 25; // Processar 25 contatos por vez para evitar timeouts
+const BATCH_SIZE = 25;
+const timestamp = () => `[${new Date().toLocaleTimeString('pt-BR', { hour12: false })}]`;
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  const supabaseAdmin = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
+
+  const appendLogs = async (jobId: string, logs: string[]) => {
+    if (!jobId || logs.length === 0) return;
+    await supabaseAdmin.rpc('append_logs_to_job', { p_job_id: jobId, p_logs: logs });
+  };
+
   try {
-    const { page } = await req.json();
+    const { page, jobId } = await req.json();
     if (!page || typeof page !== 'number' || page < 1) {
       throw new Error('Número da página inválido.');
     }
 
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
-
     const from = (page - 1) * BATCH_SIZE;
     const to = from + BATCH_SIZE - 1;
+    let logs: string[] = [`${timestamp()} Processando lote ${page}. Buscando contatos de ${from} a ${to}...`];
 
-    // Busca um lote de contatos
     const { data: contacts, error: contactsError } = await supabaseAdmin
       .from('magazord_contacts')
       .select('id, magazord_id, nome, email')
@@ -36,39 +42,36 @@ serve(async (req) => {
 
     if (contactsError) throw contactsError;
     if (!contacts || contacts.length === 0) {
+      logs.push(`${timestamp()} Nenhum contato encontrado neste lote.`);
+      await appendLogs(jobId, logs);
       return new Response(JSON.stringify({ success: true, message: 'Nenhum contato para processar nesta página.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    logs.push(`${timestamp()} ${contacts.length} contatos encontrados. Sincronizando com Mautic...`);
     let processedCount = 0;
     for (const contact of contacts) {
-      // Para cada contato, busca o pedido mais recente para saber o status atual
-      const { data: latestOrder, error: orderError } = await supabaseAdmin
-        .from('magazord_orders')
-        .select('status')
-        .eq('contact_id', contact.id)
-        .order('data_pedido', { ascending: false })
-        .limit(1)
-        .single();
-
+      const { data: latestOrder, error: orderError } = await supabaseAdmin.from('magazord_orders').select('status').eq('contact_id', contact.id).order('data_pedido', { ascending: false }).limit(1).single();
       if (orderError) {
-        console.error(`Erro ao buscar pedido para o contato ${contact.id}:`, orderError.message);
-        continue; // Pula para o próximo contato se não encontrar pedido
+        logs.push(`${timestamp()}  - Aviso: Nenhum pedido encontrado para ${contact.email}. Pulando.`);
+        continue;
       }
 
       if (latestOrder) {
-        // Invoca a função de sincronização do Mautic com os dados do contato e o status do último pedido
-        await supabaseAdmin.functions.invoke('mautic-sync', {
-          body: {
-            contact: contact,
-            orderStatus: latestOrder.status
-          }
-        });
+        const { data: mauticData, error: mauticError } = await supabaseAdmin.functions.invoke('mautic-sync', { body: { contact: contact, orderStatus: latestOrder.status } });
+        if (mauticError) {
+          logs.push(`${timestamp()}  - ERRO ao sincronizar ${contact.email}: ${mauticError.message}`);
+        } else {
+          logs.push(`${timestamp()}  - Sucesso: ${contact.email} - ${mauticData.message}`);
+        }
         processedCount++;
       }
     }
+    
+    logs.push(`${timestamp()} Lote ${page} finalizado. ${processedCount} contatos processados.`);
+    await appendLogs(jobId, logs);
 
     return new Response(
-      JSON.stringify({ success: true, message: `Lote ${page} processado. ${processedCount} contatos enviados ao Mautic.` }),
+      JSON.stringify({ success: true, message: `Lote ${page} processado.` }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 

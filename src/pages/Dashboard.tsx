@@ -10,6 +10,7 @@ import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Clock, RefreshCw, Users as UsersIcon } from "lucide-react";
 import { showError, showLoading, showSuccess } from "@/utils/toast";
+import { useNavigate } from "react-router-dom";
 
 const fetchSyncHistory = async () => {
   const { data, error } = await supabase
@@ -32,6 +33,7 @@ const fetchContactStats = async () => {
 const Dashboard = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const { data: syncHistory, isLoading: isLoadingHistory } = useQuery({
     queryKey: ["sync_history"],
@@ -49,17 +51,19 @@ const Dashboard = () => {
     const toastId = showLoading("Iniciando sincronização completa...");
 
     try {
-      const { error } = await supabase.functions.invoke('incremental-sync');
+      const { error } = await supabase.functions.invoke('incremental-sync', {
+        body: { full_sync: true }
+      });
       if (error) {
         throw new Error(`Falha na sincronização: ${error.message}`);
       }
 
-      showSuccess("Sincronização completa concluída com sucesso!");
+      showSuccess("Sincronização completa iniciada com sucesso! Acompanhe pelo histórico.", { id: toastId });
       queryClient.invalidateQueries({ queryKey: ['sync_history'] });
       queryClient.invalidateQueries({ queryKey: ['contact_stats'] });
 
     } catch (error: any) {
-      showError(error.message);
+      showError(error.message, { id: toastId });
     } finally {
       setIsSyncing(false);
     }
@@ -134,7 +138,7 @@ const Dashboard = () => {
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
             <CardTitle>Histórico de Sincronizações</CardTitle>
-            <CardDescription>Registros das últimas sincronizações.</CardDescription>
+            <CardDescription>Registros das últimas sincronizações. Clique em um registro para ver os detalhes.</CardDescription>
           </div>
           <Button onClick={handleManualSync} disabled={isSyncing} size="sm">
             <RefreshCw className={`mr-2 h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -165,7 +169,11 @@ const Dashboard = () => {
                 ))
               ) : syncHistory && syncHistory.length > 0 ? (
                 syncHistory.map((job) => (
-                  <TableRow key={job.id}>
+                  <TableRow 
+                    key={job.id} 
+                    onClick={() => navigate(`/sync-job/${job.id}`)}
+                    className="cursor-pointer hover:bg-muted/50"
+                  >
                     <TableCell>{format(new Date(job.created_at), "dd/MM/yy HH:mm:ss", { locale: ptBR })}</TableCell>
                     <TableCell>{job.finished_at ? format(new Date(job.finished_at), "dd/MM/yy HH:mm:ss", { locale: ptBR }) : '—'}</TableCell>
                     <TableCell>{formatStatus(job.status)}</TableCell>

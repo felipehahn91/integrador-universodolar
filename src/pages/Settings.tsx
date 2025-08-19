@@ -9,6 +9,7 @@ import { showSuccess, showError, showLoading } from "@/utils/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 
 const BATCH_SIZE = 25;
 
@@ -17,12 +18,8 @@ const Settings = () => {
   const [excludedDomains, setExcludedDomains] = useState("");
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isBackfilling, setIsBackfilling] = useState(false);
-  const [backfillProgress, setBackfillProgress] = useState<{ currentPage: number, totalPages: number } | null>(null);
-  const [isUpdatingContacts, setIsUpdatingContacts] = useState(false);
-  const [updateProgress, setUpdateProgress] = useState<{ currentPage: number, totalPages: number } | null>(null);
-  const [isBackfillingMautic, setIsBackfillingMautic] = useState(false);
-  const [mauticBackfillProgress, setMauticBackfillProgress] = useState<{ currentPage: number, totalPages: number } | null>(null);
+  const [isJobRunning, setIsJobRunning] = useState(false);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -60,7 +57,6 @@ const Settings = () => {
 
     if (updateError) {
       showError("Erro ao salvar configurações.");
-      console.error(updateError);
     } else {
       showSuccess("Configurações salvas com sucesso!");
     }
@@ -68,29 +64,39 @@ const Settings = () => {
     setIsSaving(false);
   };
 
-  const handleBackfill = async () => {
-    setIsBackfilling(true);
-    const toastId = showLoading("Iniciando sincronização histórica de pedidos...");
+  const runJob = async (jobName: string, functionName: string) => {
+    setIsJobRunning(true);
+    const toastId = showLoading(`Iniciando ${jobName}...`);
+    let jobId = null;
 
     try {
+      const { data: jobData, error: createError } = await supabase
+        .from('sync_jobs')
+        .insert({ status: 'running', full_sync: true, logs: [`[${new Date().toLocaleTimeString()}] Tarefa manual '${jobName}' iniciada.`] })
+        .select('id')
+        .single();
+
+      if (createError) throw createError;
+      jobId = jobData.id;
+
       const { count, error: countError } = await supabase
         .from('magazord_contacts')
         .select('*', { count: 'exact', head: true });
 
       if (countError) throw countError;
       if (!count || count === 0) {
-        showSuccess("Nenhum contato para processar.");
+        toast.success("Nenhum contato para processar.", { id: toastId });
+        await supabase.from('sync_jobs').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('id', jobId);
         return;
       }
 
       const totalPages = Math.ceil(count / BATCH_SIZE);
       
       for (let page = 1; page <= totalPages; page++) {
-        setBackfillProgress({ currentPage: page, totalPages });
-        toast.loading(`Processando lote de pedidos ${page} de ${totalPages}...`, { id: toastId });
+        toast.loading(`Processando ${jobName}: lote ${page} de ${totalPages}...`, { id: toastId });
         
-        const { error: invokeError } = await supabase.functions.invoke('backfill-orders', {
-          body: { page },
+        const { error: invokeError } = await supabase.functions.invoke(functionName, {
+          body: { page, jobId },
         });
 
         if (invokeError) {
@@ -98,93 +104,17 @@ const Settings = () => {
         }
       }
 
-      toast.success("Sincronização histórica de pedidos concluída!", { id: toastId });
-    } catch (error) {
-      showError(`Falha na sincronização: ${error.message}`);
-      toast.dismiss(toastId);
+      await supabase.from('sync_jobs').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('id', jobId);
+      toast.success(`${jobName} concluída com sucesso!`, { id: toastId });
+      queryClient.invalidateQueries({ queryKey: ['sync_history'] });
+
+    } catch (error: any) {
+      if (jobId) {
+        await supabase.from('sync_jobs').update({ status: 'failed', finished_at: new Date().toISOString(), logs: [`[${new Date().toLocaleTimeString()}] ERRO: ${error.message}`] }).eq('id', jobId);
+      }
+      showError(`Falha na tarefa: ${error.message}`, { id: toastId });
     } finally {
-      setIsBackfilling(false);
-      setBackfillProgress(null);
-    }
-  };
-
-  const handleUpdateAllContacts = async () => {
-    setIsUpdatingContacts(true);
-    const toastId = showLoading("Iniciando atualização de contatos...");
-
-    try {
-      const { count, error: countError } = await supabase
-        .from('magazord_contacts')
-        .select('*', { count: 'exact', head: true });
-
-      if (countError) throw countError;
-      if (!count || count === 0) {
-        showSuccess("Nenhum contato para processar.");
-        return;
-      }
-
-      const totalPages = Math.ceil(count / BATCH_SIZE);
-      
-      for (let page = 1; page <= totalPages; page++) {
-        setUpdateProgress({ currentPage: page, totalPages });
-        toast.loading(`Atualizando lote de contatos ${page} de ${totalPages}...`, { id: toastId });
-        
-        const { error: invokeError } = await supabase.functions.invoke('backfill-contact-details', {
-          body: { page },
-        });
-
-        if (invokeError) {
-          throw new Error(`Erro no lote ${page}: ${invokeError.message}`);
-        }
-      }
-
-      toast.success("Atualização de contatos concluída com sucesso!", { id: toastId });
-    } catch (error) {
-      showError(`Falha na atualização: ${error.message}`);
-      toast.dismiss(toastId);
-    } finally {
-      setIsUpdatingContacts(false);
-      setUpdateProgress(null);
-    }
-  };
-
-  const handleMauticBackfill = async () => {
-    setIsBackfillingMautic(true);
-    const toastId = showLoading("Iniciando sincronização da base de contatos com o Mautic...");
-
-    try {
-      const { count, error: countError } = await supabase
-        .from('magazord_contacts')
-        .select('*', { count: 'exact', head: true });
-
-      if (countError) throw countError;
-      if (!count || count === 0) {
-        toast.success("Nenhum contato para sincronizar.", { id: toastId });
-        return;
-      }
-
-      const totalPages = Math.ceil(count / BATCH_SIZE);
-      
-      for (let page = 1; page <= totalPages; page++) {
-        setMauticBackfillProgress({ currentPage: page, totalPages });
-        toast.loading(`Enviando lote ${page} de ${totalPages} para o Mautic...`, { id: toastId });
-        
-        const { error: invokeError } = await supabase.functions.invoke('mautic-backfill', {
-          body: { page },
-        });
-
-        if (invokeError) {
-          throw new Error(`Erro no lote ${page}: ${invokeError.message}`);
-        }
-      }
-
-      toast.success("Sincronização da base de contatos com o Mautic concluída!", { id: toastId });
-    } catch (error) {
-      showError(`Falha na sincronização com o Mautic: ${error.message}`);
-      toast.dismiss(toastId);
-    } finally {
-      setIsBackfillingMautic(false);
-      setMauticBackfillProgress(null);
+      setIsJobRunning(false);
     }
   };
 
@@ -226,7 +156,7 @@ const Settings = () => {
         <CardHeader>
           <CardTitle>Atualização de Dados em Massa</CardTitle>
           <CardDescription>
-            Execute estas ações para preencher dados de contatos e pedidos já existentes.
+            Execute estas ações para preencher dados de contatos e pedidos já existentes. Apenas uma tarefa pode ser executada por vez.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -235,9 +165,9 @@ const Settings = () => {
             <p className="text-sm text-muted-foreground mb-3">
               Enviar toda a base de contatos existente para o Mautic. Use esta opção uma vez para popular o Mautic com dados antigos.
             </p>
-            <Button onClick={handleMauticBackfill} disabled={isBackfillingMautic}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${isBackfillingMautic ? 'animate-spin' : ''}`} />
-              {isBackfillingMautic ? `Enviando... ${mauticBackfillProgress ? `${mauticBackfillProgress.currentPage}/${mauticBackfillProgress.totalPages}` : ''}` : "Sincronizar Base Completa com Mautic"}
+            <Button onClick={() => runJob("Sincronização com Mautic", "mautic-backfill")} disabled={isJobRunning}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isJobRunning ? 'animate-spin' : ''}`} />
+              Sincronizar Base Completa com Mautic
             </Button>
           </div>
           <div>
@@ -245,9 +175,9 @@ const Settings = () => {
             <p className="text-sm text-muted-foreground mb-3">
               Busca os dados mais recentes de todos os contatos, incluindo o telefone. Útil para preencher informações de contatos antigos.
             </p>
-            <Button onClick={handleUpdateAllContacts} disabled={isUpdatingContacts}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${isUpdatingContacts ? 'animate-spin' : ''}`} />
-              {isUpdatingContacts ? `Atualizando... ${updateProgress ? `${updateProgress.currentPage}/${updateProgress.totalPages}` : ''}` : "Atualizar Contatos"}
+            <Button onClick={() => runJob("Atualização de Contatos", "backfill-contact-details")} disabled={isJobRunning}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isJobRunning ? 'animate-spin' : ''}`} />
+              Atualizar Contatos
             </Button>
           </div>
           <div>
@@ -255,9 +185,9 @@ const Settings = () => {
             <p className="text-sm text-muted-foreground mb-3">
               Busca o histórico de pedidos de todos os contatos. Use após importar contatos pela primeira vez.
             </p>
-            <Button onClick={handleBackfill} disabled={isBackfilling}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${isBackfilling ? 'animate-spin' : ''}`} />
-              {isBackfilling ? `Processando... ${backfillProgress ? `${backfillProgress.currentPage}/${backfillProgress.totalPages}` : ''}` : "Sincronizar Pedidos Históricos"}
+            <Button onClick={() => runJob("Sincronização de Pedidos", "backfill-orders")} disabled={isJobRunning}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isJobRunning ? 'animate-spin' : ''}`} />
+              Sincronizar Pedidos Históricos
             </Button>
           </div>
         </CardContent>

@@ -14,7 +14,8 @@ import Settings from "./pages/Settings";
 import Users from "./pages/Users";
 import NotFound from "./pages/NotFound";
 import ContactDetails from "./pages/ContactDetails";
-import Contacts from "./pages/Contacts"; // Importa a nova página
+import Contacts from "./pages/Contacts";
+import SyncJobDetails from "./pages/SyncJobDetails";
 
 const queryClient = new QueryClient();
 
@@ -75,6 +76,7 @@ const App = () => (
                 <Route path="/contact/:contactId" element={<ContactDetails />} />
                 <Route path="/users" element={<Users />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/sync-job/:jobId" element={<SyncJobDetails />} />
               </Route>
             </Route>
 
