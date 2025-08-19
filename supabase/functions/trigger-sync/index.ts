@@ -18,19 +18,17 @@ serve(async (_req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // 1. Generate a secure, random token
     const token = crypto.randomUUID();
 
-    // 2. Store the token in the database
     const { error: tokenError } = await supabaseAdmin
       .from('sync_tokens')
       .insert({ token: token });
 
     if (tokenError) throw tokenError;
 
-    // 3. Invoke the actual sync function, passing the token for auth
+    // Invocando a função com o token no cabeçalho para maior robustez
     const { error: invokeError } = await supabaseAdmin.functions.invoke('incremental-sync', {
-      body: { token: token }, // CORREÇÃO: O SDK lida com a conversão para JSON automaticamente.
+      headers: { 'X-Sync-Token': token },
     });
 
     if (invokeError) throw invokeError;

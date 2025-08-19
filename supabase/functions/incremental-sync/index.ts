@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-sync-token',
 }
 
 const PAGE_LIMIT = 100;
@@ -20,10 +20,9 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
 
-  // ETAPA 1: Criar o registro do job imediatamente para dar feedback visual.
   const { data: job, error: createJobError } = await supabaseAdmin
     .from('sync_jobs')
-    .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização automática iniciada.`] })
+    .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização iniciada.`] })
     .select('id')
     .single();
 
@@ -34,16 +33,9 @@ serve(async (req) => {
   const jobId = job.id;
 
   try {
-    // ETAPA 2: Validar o token de segurança.
-    const requestBodyText = await req.text();
-    if (!requestBodyText) {
-      throw new Error('Corpo da requisição está vazio.');
-    }
-    const bodyJSON = JSON.parse(requestBodyText);
-    const token = bodyJSON.token;
-
+    const token = req.headers.get('x-sync-token');
     if (!token) {
-      throw new Error('Token de sincronização ausente. A execução não pode continuar.');
+      throw new Error('Token de sincronização ausente no cabeçalho. A execução não pode continuar.');
     }
 
     const { data: tokenData, error: findError } = await supabaseAdmin
@@ -52,23 +44,16 @@ serve(async (req) => {
       .eq('token', token)
       .single();
 
-    if (findError || !tokenData) {
-      throw new Error('Token de sincronização inválido.');
-    }
-    if (tokenData.used_at) {
-      throw new Error('Token de sincronização já utilizado.');
-    }
+    if (findError || !tokenData) throw new Error('Token de sincronização inválido.');
+    if (tokenData.used_at) throw new Error('Token de sincronização já utilizado.');
 
     const { error: updateError } = await supabaseAdmin
       .from('sync_tokens')
       .update({ used_at: new Date().toISOString() })
       .eq('id', tokenData.id);
 
-    if (updateError) {
-      throw new Error('Falha ao validar o token de segurança.');
-    }
+    if (updateError) throw new Error('Falha ao validar o token de segurança.');
 
-    // ETAPA 3: Iniciar a lógica de sincronização principal.
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
     if (!magazordApiToken || !magazordApiSecret) throw new Error('Credenciais da API Magazord não configuradas.');
@@ -107,12 +92,7 @@ serve(async (req) => {
           break; 
         }
 
-        const getTelefone = (c: any) => {
-          if (c.pessoaContato && Array.isArray(c.pessoaContato) && c.pessoaContato.length > 0) {
-            return c.pessoaContato[0].contato;
-          }
-          return null;
-        };
+        const getTelefone = (c: any) => c.pessoaContato?.[0]?.contato || null;
 
         const contactData = { 
           nome: contact.nome, 
@@ -133,7 +113,7 @@ serve(async (req) => {
         
         newRecordsCount++;
 
-        if (newContact && newContact.cpf_cnpj) {
+        if (newContact?.cpf_cnpj) {
           try {
             const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?cpfCnpj=${newContact.cpf_cnpj}`;
             const ordersResponse = await fetch(ordersEndpoint, { headers: { 'Authorization': authHeader } });
@@ -169,9 +149,7 @@ serve(async (req) => {
         }
       }
       
-      if (!stopSync) {
-        currentPage++;
-      }
+      if (!stopSync) currentPage++;
     }
 
     const finalLog = `${timestamp()} Sincronização concluída. ${newRecordsCount} novos contatos adicionados.`;
@@ -188,7 +166,6 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true, message: finalLog }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    // ETAPA 4: Se qualquer coisa no bloco try falhar, atualiza o job para 'failed'.
     const errorMessage = `${timestamp()} ERRO: ${error.message}`;
     await supabaseAdmin
       .from('sync_jobs')
