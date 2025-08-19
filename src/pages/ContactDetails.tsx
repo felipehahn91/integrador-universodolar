@@ -4,10 +4,11 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
+import { Badge, BadgeProps } from "@/components/ui/badge";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
+import { useMemo } from "react";
 
 const fetchContactDetails = async (contactId: string) => {
   const { data, error } = await supabase
@@ -29,6 +30,14 @@ const fetchContactOrders = async (contactId: string) => {
   return data;
 };
 
+const fetchAllStatuses = async () => {
+  const { data, error } = await supabase
+    .from("order_statuses")
+    .select("*, order_status_types(description)");
+  if (error) throw new Error(error.message);
+  return data;
+};
+
 const ContactDetails = () => {
   const { contactId } = useParams<{ contactId: string }>();
   const navigate = useNavigate();
@@ -44,6 +53,29 @@ const ContactDetails = () => {
     queryFn: () => fetchContactOrders(contactId!),
     enabled: !!contactId,
   });
+
+  const { data: statuses, isLoading: isLoadingStatuses } = useQuery({
+    queryKey: ["order_statuses"],
+    queryFn: fetchAllStatuses,
+  });
+
+  const statusMap = useMemo(() => {
+    if (!statuses) return new Map();
+    return new Map(statuses.map(s => [s.id, s]));
+  }, [statuses]);
+
+  const getBadgeVariant = (statusType: string | undefined): BadgeProps["variant"] => {
+    switch (statusType) {
+      case 'Cancelado': return 'destructive';
+      case 'Anomalia': return 'secondary';
+      case 'Aguardando Terceiro': return 'outline';
+      case 'Normal':
+      default:
+        return 'default';
+    }
+  };
+
+  const isLoading = isLoadingContact || isLoadingOrders || isLoadingStatuses;
 
   return (
     <div className="space-y-6">
@@ -78,7 +110,11 @@ const ContactDetails = () => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
                 <p className="font-medium">CPF/CNPJ</p>
-                <p className="text-muted-foreground">{contact?.cpf_cnpj}</p>
+                <p className="text-muted-foreground">{contact?.cpf_cnpj || '—'}</p>
+              </div>
+              <div>
+                <p className="font-medium">Telefone</p>
+                <p className="text-muted-foreground">{contact?.telefone || '—'}</p>
               </div>
               <div>
                 <p className="font-medium">Tipo</p>
@@ -117,7 +153,7 @@ const ContactDetails = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoadingOrders ? (
+              {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <TableRow key={i}>
                     <TableCell><Skeleton className="h-4 w-32" /></TableCell>
@@ -127,16 +163,24 @@ const ContactDetails = () => {
                   </TableRow>
                 ))
               ) : orders && orders.length > 0 ? (
-                orders.map((order) => (
-                  <TableRow key={order.id}>
-                    <TableCell className="font-medium">{order.magazord_order_id}</TableCell>
-                    <TableCell>{new Date(order.data_pedido).toLocaleDateString('pt-BR')}</TableCell>
-                    <TableCell><Badge>{order.status}</Badge></TableCell>
-                    <TableCell className="text-right">
-                      {Number(order.valor_total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </TableCell>
-                  </TableRow>
-                ))
+                orders.map((order) => {
+                  const statusInfo = statusMap.get(order.status_id);
+                  const statusTypeDescription = statusInfo?.order_status_types?.description;
+                  return (
+                    <TableRow key={order.id}>
+                      <TableCell className="font-medium">{order.magazord_order_id}</TableCell>
+                      <TableCell>{new Date(order.data_pedido).toLocaleDateString('pt-BR')}</TableCell>
+                      <TableCell>
+                        <Badge variant={getBadgeVariant(statusTypeDescription)}>
+                          {order.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {Number(order.valor_total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               ) : (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center">Nenhum pedido encontrado.</TableCell>

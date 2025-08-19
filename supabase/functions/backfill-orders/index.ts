@@ -66,6 +66,7 @@ serve(async (req) => {
               magazord_order_id: String(order.id),
               valor_total: order.valorTotal,
               status: order.pedidoSituacaoDescricao,
+              status_id: order.pedidoSituacaoId,
               data_pedido: order.dataHora,
             }));
             await supabaseAdmin.from('magazord_orders').insert(ordersToInsert);
