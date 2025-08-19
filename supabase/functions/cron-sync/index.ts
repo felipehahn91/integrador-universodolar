@@ -49,9 +49,9 @@ serve(async (req) => {
     if (createError) throw createError;
     const jobId = jobData.id;
 
-    // 4. Invoca o worker unificado de forma assíncrona
+    // 4. Invoca o worker unificado para a primeira página
     supabaseAdmin.functions.invoke('unified-sync-worker', {
-      body: { jobId, full_sync: false }
+      body: { jobId, full_sync: false, page: 1 }
     });
 
     return new Response(JSON.stringify({ success: true, message: 'Unified sync job started.', jobId }), {
