@@ -119,7 +119,6 @@ serve(async (req) => {
           }
         }
 
-        // Nova lógica de sincronização com Mautic
         if (contact.email) {
           const { data: latestOrder } = await supabaseAdmin.from('magazord_orders').select('status').eq('contact_id', contact.id).order('data_pedido', { ascending: false }).limit(1).single();
           const newTag = latestOrder ? getMauticTagForStatus(latestOrder.status) : null;
@@ -136,8 +135,8 @@ serve(async (req) => {
 
           let mauticId = contact.mautic_id;
 
-          if (!mauticId) {
-            const searchUrl = `${mauticUrl}/api/contacts?search=email:${encodeURIComponent(contact.email)}`;
+          if (!mauticId && contact.magazord_id) {
+            const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
             const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
             if (searchResponse.ok) {
               const searchResult = await searchResponse.json();
@@ -149,11 +148,9 @@ serve(async (req) => {
           }
 
           if (mauticId) {
-            // Atualiza contato existente
             const updateUrl = `${mauticUrl}/api/contacts/${mauticId}/edit`;
             await fetch(updateUrl, { method: 'PATCH', headers: mauticHeaders, body: JSON.stringify(payload) });
           } else {
-            // Cria novo contato
             const createUrl = `${mauticUrl}/api/contacts/new`;
             const createResponse = await fetch(createUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify(payload) });
             if (createResponse.ok) {
@@ -162,7 +159,6 @@ serve(async (req) => {
             }
           }
 
-          // Salva o ID do Mautic no nosso banco se ele foi encontrado ou criado
           if (mauticId && !contact.mautic_id) {
             await supabaseAdmin.from('magazord_contacts').update({ mautic_id: mauticId }).eq('id', contact.id);
           }

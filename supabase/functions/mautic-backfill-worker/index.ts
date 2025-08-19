@@ -101,8 +101,8 @@ serve(async (req) => {
 
           let mauticId = contact.mautic_id;
 
-          if (!mauticId) {
-            const searchUrl = `${mauticUrl}/api/contacts?search=email:${encodeURIComponent(contact.email)}`;
+          if (!mauticId && contact.magazord_id) {
+            const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
             const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
             if (searchResponse.ok) {
               const searchResult = await searchResponse.json();
