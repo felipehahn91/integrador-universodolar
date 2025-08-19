@@ -1,0 +1,7 @@
+version: '3.8'
+services:
+  web:
+    build: .
+    container_name: universo-do-lar-app
+    ports:
+      - "8080:80"
