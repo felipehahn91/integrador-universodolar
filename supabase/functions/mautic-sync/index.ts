@@ -73,7 +73,7 @@ serve(async (req) => {
       lastname: lastname,
       email: contact.email,
       idmagazord: parseInt(contact.magazord_id, 10),
-      company: 1, // Usando o ID da empresa
+      company: "Universo do Lar",
     };
 
     if (searchResult.total > 0) {
