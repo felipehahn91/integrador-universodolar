@@ -9,7 +9,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Clock, RefreshCw, Users as UsersIcon } from "lucide-react";
-import { showSuccess, showError, showLoading } from "@/utils/toast";
+import { showError, showLoading } from "@/utils/toast";
 import { toast } from "sonner";
 
 const fetchSyncHistory = async () => {
@@ -47,22 +47,34 @@ const Dashboard = () => {
 
   const handleManualSync = async () => {
     setIsSyncing(true);
-    const toastId = showLoading("Iniciando sincronização manual...");
-    
-    // Chamando a função principal diretamente
-    const { error } = await supabase.functions.invoke('incremental-sync');
-    
-    toast.dismiss(toastId);
+    const toastId = showLoading("Iniciando sincronização completa...");
 
-    if (error) {
-      showError(`Falha ao iniciar: ${error.message}`);
-    } else {
-      showSuccess("Sincronização iniciada. A tabela será atualizada em breve.");
+    try {
+      // Etapa 1: Sincronização incremental de novos contatos
+      toast.loading("Etapa 1/2: Buscando novos contatos...", { id: toastId });
+      const { error: syncError } = await supabase.functions.invoke('incremental-sync');
+      if (syncError) {
+        throw new Error(`Falha ao buscar novos contatos: ${syncError.message}`);
+      }
+
+      // Etapa 2: Atualização dos status dos pedidos
+      toast.loading("Etapa 2/2: Atualizando status dos pedidos...", { id: toastId });
+      const { error: updateError } = await supabase.functions.invoke('update-order-statuses');
+      if (updateError) {
+        throw new Error(`Falha ao atualizar status dos pedidos: ${updateError.message}`);
+      }
+
+      // Sucesso
+      toast.success("Sincronização completa concluída com sucesso!", { id: toastId });
       queryClient.invalidateQueries({ queryKey: ['sync_history'] });
       queryClient.invalidateQueries({ queryKey: ['contact_stats'] });
+
+    } catch (error: any) {
+      showError(error.message);
+      toast.dismiss(toastId);
+    } finally {
+      setIsSyncing(false);
     }
-    
-    setIsSyncing(false);
   };
 
   const formatStatus = (status: string) => {
