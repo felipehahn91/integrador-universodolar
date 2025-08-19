@@ -8,7 +8,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { showSuccess, showError, showLoading } from "@/utils/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Separator } from "@/components/ui/separator";
 import { RefreshCw } from "lucide-react";
 
 const BATCH_SIZE = 25;
@@ -21,6 +20,8 @@ const Settings = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isBackfilling, setIsBackfilling] = useState(false);
   const [backfillProgress, setBackfillProgress] = useState<{ currentPage: number, totalPages: number } | null>(null);
+  const [isUpdatingContacts, setIsUpdatingContacts] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<{ currentPage: number, totalPages: number } | null>(null);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -81,7 +82,7 @@ const Settings = () => {
 
   const handleBackfill = async () => {
     setIsBackfilling(true);
-    const toastId = showLoading("Iniciando sincronização histórica...");
+    const toastId = showLoading("Iniciando sincronização histórica de pedidos...");
 
     try {
       const { count, error: countError } = await supabase
@@ -98,7 +99,7 @@ const Settings = () => {
       
       for (let page = 1; page <= totalPages; page++) {
         setBackfillProgress({ currentPage: page, totalPages });
-        toast.loading(`Processando lote ${page} de ${totalPages}...`, { id: toastId });
+        toast.loading(`Processando lote de pedidos ${page} de ${totalPages}...`, { id: toastId });
         
         const { error: invokeError } = await supabase.functions.invoke('backfill-orders', {
           body: { page },
@@ -109,13 +110,53 @@ const Settings = () => {
         }
       }
 
-      toast.success("Sincronização histórica concluída com sucesso!", { id: toastId });
+      toast.success("Sincronização histórica de pedidos concluída!", { id: toastId });
     } catch (error) {
       showError(`Falha na sincronização: ${error.message}`);
       toast.dismiss(toastId);
     } finally {
       setIsBackfilling(false);
       setBackfillProgress(null);
+    }
+  };
+
+  const handleUpdateAllContacts = async () => {
+    setIsUpdatingContacts(true);
+    const toastId = showLoading("Iniciando atualização de contatos...");
+
+    try {
+      const { count, error: countError } = await supabase
+        .from('magazord_contacts')
+        .select('*', { count: 'exact', head: true });
+
+      if (countError) throw countError;
+      if (!count || count === 0) {
+        showSuccess("Nenhum contato para processar.");
+        return;
+      }
+
+      const totalPages = Math.ceil(count / BATCH_SIZE);
+      
+      for (let page = 1; page <= totalPages; page++) {
+        setUpdateProgress({ currentPage: page, totalPages });
+        toast.loading(`Atualizando lote de contatos ${page} de ${totalPages}...`, { id: toastId });
+        
+        const { error: invokeError } = await supabase.functions.invoke('backfill-contact-details', {
+          body: { page },
+        });
+
+        if (invokeError) {
+          throw new Error(`Erro no lote ${page}: ${invokeError.message}`);
+        }
+      }
+
+      toast.success("Atualização de contatos concluída com sucesso!", { id: toastId });
+    } catch (error) {
+      showError(`Falha na atualização: ${error.message}`);
+      toast.dismiss(toastId);
+    } finally {
+      setIsUpdatingContacts(false);
+      setUpdateProgress(null);
     }
   };
 
@@ -158,22 +199,32 @@ const Settings = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Sincronização Histórica de Pedidos</CardTitle>
+          <CardTitle>Atualização de Dados em Massa</CardTitle>
           <CardDescription>
-            Execute esta ação para buscar e salvar o histórico de pedidos de todos os contatos já importados.
-            Este processo pode levar vários minutos.
+            Execute estas ações para preencher dados de contatos e pedidos já existentes.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <Button onClick={handleBackfill} disabled={isBackfilling}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${isBackfilling ? 'animate-spin' : ''}`} />
-            {isBackfilling ? `Processando... ${backfillProgress ? `${backfillProgress.currentPage}/${backfillProgress.totalPages}` : ''}` : "Iniciar Sincronização Histórica"}
-          </Button>
-          {isBackfilling && backfillProgress && (
-            <p className="text-sm text-muted-foreground mt-2">
-              Processando lote {backfillProgress.currentPage} de {backfillProgress.totalPages}. Não feche esta página.
+        <CardContent className="space-y-4">
+          <div>
+            <h3 className="font-semibold mb-2">Atualizar Detalhes dos Contatos</h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              Busca os dados mais recentes de todos os contatos, incluindo o telefone. Útil para preencher informações de contatos antigos.
             </p>
-          )}
+            <Button onClick={handleUpdateAllContacts} disabled={isUpdatingContacts}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isUpdatingContacts ? 'animate-spin' : ''}`} />
+              {isUpdatingContacts ? `Atualizando... ${updateProgress ? `${updateProgress.currentPage}/${updateProgress.totalPages}` : ''}` : "Atualizar Contatos"}
+            </Button>
+          </div>
+          <div>
+            <h3 className="font-semibold mb-2">Sincronização Histórica de Pedidos</h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              Busca o histórico de pedidos de todos os contatos. Use após importar contatos pela primeira vez.
+            </p>
+            <Button onClick={handleBackfill} disabled={isBackfilling}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isBackfilling ? 'animate-spin' : ''}`} />
+              {isBackfilling ? `Processando... ${backfillProgress ? `${backfillProgress.currentPage}/${backfillProgress.totalPages}` : ''}` : "Sincronizar Pedidos Históricos"}
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
