@@ -73,6 +73,7 @@ serve(async (req) => {
       lastname: lastname,
       email: contact.email,
       idmagazord: contact.magazord_id,
+      companyname: "Universo do Lar",
     };
 
     if (searchResult.total > 0) {
