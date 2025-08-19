@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-cron-secret',
 }
 
 const PAGE_LIMIT = 100;
@@ -13,6 +13,15 @@ const timestamp = () => `[${new Date().toLocaleTimeString()}]`;
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
+  }
+
+  // Etapa de Segurança: Verificar o segredo do cron job.
+  const cronSecret = Deno.env.get('CRON_SECRET');
+  const requestSecret = req.headers.get('x-cron-secret');
+
+  if (!cronSecret || requestSecret !== cronSecret) {
+    console.error('Chamada não autorizada para a função de sincronização.');
+    return new Response(JSON.stringify({ success: false, error: 'Não autorizado.' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   const supabaseAdmin = createClient(
@@ -29,7 +38,6 @@ serve(async (req) => {
 
   if (createJobError) {
     console.error('Falha CRÍTICA ao criar o registro do job:', createJobError);
-    // Se não conseguirmos nem criar o registro, não há nada que possamos fazer.
     return new Response(JSON.stringify({ success: false, error: 'Falha ao iniciar o job.' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
   const jobId = job.id;
