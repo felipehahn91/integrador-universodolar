@@ -20,11 +20,24 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
 
-  // --- TOKEN VALIDATION START ---
+  // ETAPA 1: Criar o registro do job imediatamente para dar feedback visual.
+  const { data: job, error: createJobError } = await supabaseAdmin
+    .from('sync_jobs')
+    .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização automática iniciada.`] })
+    .select('id')
+    .single();
+
+  if (createJobError) {
+    console.error('Falha CRÍTICA ao criar o registro do job:', createJobError);
+    return new Response(JSON.stringify({ success: false, error: 'Falha ao iniciar o job.' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+  const jobId = job.id;
+
   try {
+    // ETAPA 2: Validar o token de segurança.
     const { token } = await req.json();
     if (!token) {
-      throw new Error('Missing sync token.');
+      throw new Error('Token de sincronização ausente. A execução não pode continuar.');
     }
 
     const { data: tokenData, error: findError } = await supabaseAdmin
@@ -34,11 +47,10 @@ serve(async (req) => {
       .single();
 
     if (findError || !tokenData) {
-      throw new Error('Invalid sync token.');
+      throw new Error('Token de sincronização inválido.');
     }
-
     if (tokenData.used_at) {
-      throw new Error('Sync token already used.');
+      throw new Error('Token de sincronização já utilizado.');
     }
 
     const { error: updateError } = await supabaseAdmin
@@ -47,26 +59,10 @@ serve(async (req) => {
       .eq('id', tokenData.id);
 
     if (updateError) {
-      throw new Error('Failed to validate token.');
+      throw new Error('Falha ao validar o token de segurança.');
     }
-  } catch (authError) {
-    return new Response(JSON.stringify({ success: false, error: `Authentication failed: ${authError.message}` }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-  // --- TOKEN VALIDATION END ---
 
-  const { data: job, error: createJobError } = await supabaseAdmin
-    .from('sync_jobs')
-    .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização automática iniciada.`] })
-    .select('id')
-    .single();
-
-  if (createJobError) {
-    console.error('Falha ao criar o registro do job:', createJobError);
-    return new Response(JSON.stringify({ success: false, error: 'Falha ao iniciar o job.' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-  const jobId = job.id;
-
-  try {
+    // ETAPA 3: Iniciar a lógica de sincronização principal.
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
     if (!magazordApiToken || !magazordApiSecret) throw new Error('Credenciais da API Magazord não configuradas.');
@@ -183,7 +179,8 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true, message: finalLog }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    const errorMessage = `${timestamp()} ERRO CRÍTICO: ${error.message}`;
+    // ETAPA 4: Se qualquer coisa no bloco try falhar, atualiza o job para 'failed'.
+    const errorMessage = `${timestamp()} ERRO: ${error.message}`;
     await supabaseAdmin
       .from('sync_jobs')
       .update({ status: 'failed', finished_at: new Date().toISOString(), logs: [errorMessage] })
