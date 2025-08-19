@@ -30,7 +30,7 @@ serve(async (_req) => {
 
     // 3. Invoke the actual sync function, passing the token for auth
     const { error: invokeError } = await supabaseAdmin.functions.invoke('incremental-sync', {
-      body: { token: token },
+      body: JSON.stringify({ token: token }), // CORREÇÃO: Enviar o corpo como uma string JSON
     });
 
     if (invokeError) throw invokeError;
