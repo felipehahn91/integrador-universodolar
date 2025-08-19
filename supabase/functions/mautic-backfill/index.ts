@@ -58,9 +58,11 @@ serve(async (req) => {
 
       if (latestOrder) {
         const { data: mauticData, error: mauticError } = await supabaseAdmin.functions.invoke('mautic-sync', { body: { contact: contact, orderStatus: latestOrder.status } });
+        
         if (mauticError) {
-          // Alteração aqui: Capturando o erro completo para diagnóstico
-          logs.push(`${timestamp()}  - ERRO ao sincronizar ${contact.email}: ${JSON.stringify(mauticError)}`);
+          // Alteração aqui: Capturando a mensagem de erro direta, que é mais informativa.
+          const detailedErrorMessage = mauticError.message || JSON.stringify(mauticError);
+          logs.push(`${timestamp()}  - ERRO ao sincronizar ${contact.email}: ${detailedErrorMessage}`);
         } else {
           logs.push(`${timestamp()}  - Sucesso: ${contact.email} - ${mauticData.message}`);
         }
