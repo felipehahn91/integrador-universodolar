@@ -7,6 +7,7 @@ const corsHeaders = {
 }
 
 const BATCH_SIZE = 25;
+const API_DELAY_MS = 500; // Atraso de 500ms entre as chamadas
 const timestamp = () => `[${new Date().toLocaleTimeString('pt-BR', { hour12: false })}]`;
 
 serve(async (req) => {
@@ -84,6 +85,8 @@ serve(async (req) => {
         }
         processedCount++;
       }
+      // Adiciona o atraso para evitar rate limit
+      await new Promise(resolve => setTimeout(resolve, API_DELAY_MS));
     }
     
     logs.push(`${timestamp()} Lote ${page} finalizado. ${processedCount} contatos processados.`);
