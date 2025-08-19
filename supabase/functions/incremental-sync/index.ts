@@ -15,10 +15,17 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  // Log de diagnóstico para cabeçalhos
+  const headersObject: { [key: string]: string } = {};
+  for (const [key, value] of req.headers.entries()) {
+    headersObject[key] = value;
+  }
+  console.log("Cabeçalhos recebidos:", JSON.stringify(headersObject, null, 2));
+
   // Verificação de segurança: Garante que a função foi chamada por um serviço autorizado (como o cron da Supabase)
   const authHeader = req.headers.get('Authorization');
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    console.error('Chamada não autorizada recebida.');
+    console.error('Chamada não autorizada recebida. Auth header:', authHeader);
     return new Response(JSON.stringify({ success: false, error: 'Acesso não autorizado.' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
