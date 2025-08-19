@@ -110,12 +110,12 @@ serve(async (req) => {
             firstname: nomeParts[0] || '',
             lastname: nomeParts.slice(1).join(' ') || '',
             email: contact.email,
-            idmagazord: contact.magazord_id,
+            idmagazord: String(contact.magazord_id),
             company: "Universo do Lar",
           };
 
           if (newTag) {
-            contactPayload.tags = [newTag];
+            contactPayload.tags = newTag;
           }
 
           if (searchResult.total > 0) {
