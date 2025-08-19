@@ -13,7 +13,6 @@ import { RefreshCw } from "lucide-react";
 const BATCH_SIZE = 25;
 
 const Settings = () => {
-  const [syncInterval, setSyncInterval] = useState(6);
   const [batchSize, setBatchSize] = useState(50);
   const [excludedDomains, setExcludedDomains] = useState("");
   const [loading, setLoading] = useState(true);
@@ -36,7 +35,6 @@ const Settings = () => {
         showError("Erro ao carregar configurações.");
         console.error(error);
       } else if (data) {
-        setSyncInterval(data.sync_interval_hours || 6); 
         setBatchSize(data.batch_size);
         setExcludedDomains(data.excluded_domains.join("\n"));
       }
@@ -53,7 +51,6 @@ const Settings = () => {
     const { error: updateError } = await supabase
       .from("settings")
       .update({
-        sync_interval_hours: syncInterval,
         batch_size: batchSize,
         excluded_domains: domainsArray,
       })
@@ -62,19 +59,8 @@ const Settings = () => {
     if (updateError) {
       showError("Erro ao salvar configurações.");
       console.error(updateError);
-      setIsSaving(false);
-      return;
-    }
-
-    const { error: functionError } = await supabase.functions.invoke('update-sync-schedule', {
-      body: { intervalHours: syncInterval },
-    });
-
-    if (functionError) {
-      showError("Configurações salvas, mas falha ao reagendar a tarefa automática.");
-      console.error(functionError);
     } else {
-      showSuccess("Configurações salvas e tarefa automática reagendada com sucesso!");
+      showSuccess("Configurações salvas com sucesso!");
     }
     
     setIsSaving(false);
@@ -165,12 +151,13 @@ const Settings = () => {
       <Card>
         <CardHeader>
           <CardTitle>Configurações Gerais</CardTitle>
-          <CardDescription>Ajuste os parâmetros de sincronização da aplicação.</CardDescription>
+          <CardDescription>
+            Ajuste os parâmetros de sincronização da aplicação. A sincronização automática está configurada para rodar a cada hora.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {loading ? (
             <div className="space-y-6">
-              <Skeleton className="h-4 w-48" /><Skeleton className="h-10 w-full" />
               <Skeleton className="h-4 w-40" /><Skeleton className="h-10 w-full" />
               <Skeleton className="h-4 w-56" /><Skeleton className="h-24 w-full" />
               <Skeleton className="h-10 w-32" />
@@ -178,13 +165,9 @@ const Settings = () => {
           ) : (
             <>
               <div className="space-y-2">
-                <Label htmlFor="syncInterval">Intervalo de Sincronização Automática (horas)</Label>
-                <Input id="syncInterval" type="number" min="1" value={syncInterval} onChange={(e) => setSyncInterval(Number(e.target.value))} />
-                <p className="text-sm text-muted-foreground">Define a frequência com que a sincronização automática será executada.</p>
-              </div>
-              <div className="space-y-2">
                 <Label htmlFor="batchSize">Tamanho do Lote (Batch Size)</Label>
                 <Input id="batchSize" type="number" value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value))} />
+                 <p className="text-sm text-muted-foreground">Número de registros a serem processados por vez nas tarefas em massa.</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="excludedDomains">Domínios de E-mail Excluídos</Label>

@@ -22,16 +22,6 @@ const fetchSyncHistory = async () => {
   return data;
 }
 
-const fetchSettings = async () => {
-  const { data, error } = await supabase
-    .from("settings")
-    .select("sync_interval_hours")
-    .eq("singleton_key", 1)
-    .single();
-  if (error) throw new Error(error.message);
-  return data;
-}
-
 const fetchContactStats = async () => {
     const { count, error } = await supabase
     .from('magazord_contacts')
@@ -50,11 +40,6 @@ const Dashboard = () => {
     refetchInterval: 30000,
   });
 
-  const { data: settings, isLoading: isLoadingSettings } = useQuery({
-    queryKey: ["settings"],
-    queryFn: fetchSettings,
-  });
-
   const { data: contactStats, isLoading: isLoadingContactStats } = useQuery({
       queryKey: ["contact_stats"],
       queryFn: fetchContactStats,
@@ -64,7 +49,7 @@ const Dashboard = () => {
     setIsSyncing(true);
     const toastId = showLoading("Iniciando sincronização manual...");
     
-    const { error } = await supabase.functions.invoke('incremental-sync');
+    const { error } = await supabase.functions.invoke('trigger-sync');
     
     toast.dismiss(toastId);
 
@@ -133,15 +118,11 @@ const Dashboard = () => {
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            {isLoadingSettings ? (
-              <Skeleton className="h-8 w-3/4" />
-            ) : (
-              <div className="text-2xl font-bold">
-                A cada {settings?.sync_interval_hours} hora(s)
-              </div>
-            )}
+            <div className="text-2xl font-bold">
+              A cada 1 hora
+            </div>
             <p className="text-xs text-muted-foreground">
-              A tarefa é executada no início de cada intervalo.
+              A tarefa é executada no início de cada hora.
             </p>
           </CardContent>
         </Card>
