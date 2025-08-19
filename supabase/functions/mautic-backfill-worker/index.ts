@@ -6,8 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const BATCH_SIZE = 10;
-const API_DELAY_MS = 500;
+const BATCH_SIZE = 50; // Aumentado o tamanho do lote devido à maior eficiência
 const timestamp = () => `[${new Date().toLocaleTimeString('pt-BR', { hour12: false })}]`;
 
 // Helper function to get Mautic OAuth2 token
@@ -86,69 +85,58 @@ serve(async (req) => {
     if (!contacts || contacts.length === 0) {
       logs.push(`${timestamp()} Nenhum contato encontrado neste lote.`);
     } else {
-      logs.push(`${timestamp()} ${contacts.length} contatos encontrados. Sincronizando com Mautic...`);
-      let processedInBatch = 0;
+      logs.push(`${timestamp()} ${contacts.length} contatos encontrados. Sincronizando com Mautic em lote...`);
+      
+      const validContacts = contacts.filter(c => c.email);
+      const emailsToSearch = validContacts.map(c => c.email);
+      
+      const searchUrl = `${mauticUrl}/api/contacts?search=${emailsToSearch.map(e => `email:${encodeURIComponent(e)}`).join(' or ')}&limit=${validContacts.length}`;
+      const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
+      if (!searchResponse.ok) throw new Error(`Falha ao buscar contatos em lote no Mautic: ${await searchResponse.text()}`);
+      const searchResult = await searchResponse.json();
+      
+      const existingMauticContacts = new Map(Object.values(searchResult.contacts || {}).map((c: any) => [c.fields.core.email.value, c.id]));
+      
+      const contactsToCreate = [];
+      const contactsToUpdate: { [key: string]: any } = {};
 
-      for (const contact of contacts) {
-        if (!contact.email) {
-          logs.push(`${timestamp()}  - Aviso: Contato ${contact.magazord_id} pulado por não ter email.`);
-          continue;
-        }
-
+      for (const contact of validContacts) {
         const { data: latestOrder } = await supabaseAdmin.from('magazord_orders').select('status').eq('contact_id', contact.id).order('data_pedido', { ascending: false }).limit(1).single();
+        const newTag = latestOrder ? getMauticTagForStatus(latestOrder.status) : null;
+        const nomeParts = (contact.nome || '').split(' ').filter(Boolean);
         
-        try {
-          const newTag = latestOrder ? getMauticTagForStatus(latestOrder.status) : null;
+        const payload = {
+          firstname: nomeParts[0] || '',
+          lastname: nomeParts.slice(1).join(' ') || '',
+          email: contact.email,
+          idmagazord: String(contact.magazord_id),
+          company: "Universo do Lar",
+          tags: newTag ? [newTag] : [],
+        };
 
-          const searchUrl = `${mauticUrl}/api/contacts?search=email:${encodeURIComponent(contact.email)}`;
-          const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
-          if (!searchResponse.ok) {
-            const errorBody = await searchResponse.text();
-            throw new Error(`Falha ao BUSCAR contato: ${searchResponse.status} ${errorBody}`);
-          }
-          const searchResult = await searchResponse.json();
-          
-          const nomeCompleto = contact.nome || '';
-          const nomeParts = nomeCompleto.split(' ').filter(Boolean);
-          const contactPayload: any = {
-            firstname: nomeParts[0] || '',
-            lastname: nomeParts.slice(1).join(' ') || '',
-            email: contact.email,
-            idmagazord: String(contact.magazord_id),
-            company: "Universo do Lar",
-          };
-
-          if (newTag) {
-            contactPayload.tags = [newTag];
-          }
-
-          if (searchResult.total > 0) {
-            const mauticContactId = Object.keys(searchResult.contacts)[0];
-            const updateUrl = `${mauticUrl}/api/contacts/${mauticContactId}/edit`;
-            const updateResponse = await fetch(updateUrl, { method: 'PATCH', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
-            if (!updateResponse.ok) {
-              const errorBody = await updateResponse.text();
-              throw new Error(`Falha ao ATUALIZAR contato ${mauticContactId}: ${updateResponse.status} ${errorBody}`);
-            }
-            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) atualizado ${newTag ? `com a tag ${newTag}` : 'sem nova tag'}.`);
-          } else {
-            const createUrl = `${mauticUrl}/api/contacts/new`;
-            const createResponse = await fetch(createUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
-            if (!createResponse.ok) {
-              const errorBody = await createResponse.text();
-              throw new Error(`Falha ao CRIAR contato: ${createResponse.status} ${errorBody}`);
-            }
-            const createResult = await createResponse.json();
-            const mauticContactId = createResult.contact.id;
-            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) criado ${newTag ? `com a tag ${newTag}` : 'sem tag'}.`);
-          }
-          processedInBatch++;
-        } catch (syncError) {
-          logs.push(`${timestamp()}  - ERRO ${contact.email}: ${syncError.message}`);
+        const mauticId = existingMauticContacts.get(contact.email);
+        if (mauticId) {
+          contactsToUpdate[mauticId] = payload;
+        } else {
+          contactsToCreate.push(payload);
         }
-        await new Promise(resolve => setTimeout(resolve, API_DELAY_MS));
       }
-      logs.push(`${timestamp()} Lote ${page} finalizado. ${processedInBatch} contatos processados.`);
+
+      if (contactsToCreate.length > 0) {
+        const createUrl = `${mauticUrl}/api/contacts/batch/new`;
+        const createResponse = await fetch(createUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify(contactsToCreate) });
+        if (!createResponse.ok) throw new Error(`Falha ao criar contatos em lote: ${await createResponse.text()}`);
+        logs.push(`${timestamp()}  - Sucesso: ${contactsToCreate.length} contatos criados em lote.`);
+      }
+
+      if (Object.keys(contactsToUpdate).length > 0) {
+        const updateUrl = `${mauticUrl}/api/contacts/batch/edit`;
+        const updateResponse = await fetch(updateUrl, { method: 'PATCH', headers: mauticHeaders, body: JSON.stringify(contactsToUpdate) });
+        if (!updateResponse.ok) throw new Error(`Falha ao atualizar contatos em lote: ${await updateResponse.text()}`);
+        logs.push(`${timestamp()}  - Sucesso: ${Object.keys(contactsToUpdate).length} contatos atualizados em lote.`);
+      }
+      
+      logs.push(`${timestamp()} Lote ${page} finalizado.`);
     }
     
     await appendLogs(jobId, logs);
