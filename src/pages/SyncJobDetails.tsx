@@ -33,17 +33,26 @@ const SyncJobDetails = () => {
     enabled: !!jobId,
   });
 
+  // Efeito para atualização em tempo real
   useEffect(() => {
     if (!jobId) return;
+
     const channel = supabase
       .channel(`sync_job_details_${jobId}`)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'sync_jobs', filter: `id=eq.${jobId}` },
-        () => { queryClient.invalidateQueries({ queryKey: ["sync_job_details", jobId] }); }
+        () => {
+          // Quando uma atualização é recebida, invalida a query para forçar o refetch
+          queryClient.invalidateQueries({ queryKey: ["sync_job_details", jobId] });
+        }
       )
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    // Limpa a inscrição ao desmontar o componente
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [jobId, queryClient]);
 
   const handleCancelJob = async () => {
@@ -120,7 +129,7 @@ const SyncJobDetails = () => {
             <div className="space-y-2"><Skeleton className="h-6 w-full" /><Skeleton className="h-6 w-full" /><Skeleton className="h-6 w-5/6" /></div>
           ) : (
             <div className="bg-muted/50 p-4 rounded-lg font-mono text-sm max-h-96 overflow-y-auto">
-              {job?.logs && job.logs.length > 0 ? (job.logs.map((log, index) => <p key={index}>{log}</p>)) : (<p>Nenhum log registrado para este job.</p>)}
+              {job?.logs && job.logs.length > 0 ? (job.logs.slice().reverse().map((log, index) => <p key={index}>{log}</p>)) : (<p>Nenhum log registrado para este job.</p>)}
             </div>
           )}
         </CardContent>
