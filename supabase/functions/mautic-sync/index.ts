@@ -72,7 +72,7 @@ serve(async (req) => {
       firstname: firstname,
       lastname: lastname,
       email: contact.email,
-      idmagazord: contact.magazord_id,
+      idmagazord: parseInt(contact.magazord_id, 10),
       companyname: "Universo do Lar",
     };
 
