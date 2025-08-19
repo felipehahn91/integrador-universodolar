@@ -73,31 +73,57 @@ serve(async (req) => {
     let page = 1;
     let stopProcessing = false;
     while (!stopProcessing) {
-      const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa?page=${page}&orderBy=id&orderDirection=desc&limit=100`;
+      const { data: jobStatus } = await supabaseAdmin.from('sync_jobs').select('status').eq('id', jobId).single();
+      if (jobStatus?.status === 'cancelled' || jobStatus?.status === 'failed') {
+        await appendLogs(supabaseAdmin, jobId, [`${timestamp()} Tarefa interrompida (status: ${jobStatus?.status}).`]);
+        stopProcessing = true;
+        break;
+      }
+
+      const contactsEndpoint = `${magazordBaseUrl}/v2/site/pessoa?page=${page}&orderBy=id&orderDirection=desc&limit=50`;
       const response = await fetch(contactsEndpoint, { headers: { 'Authorization': authHeaderMagazord } });
       if (!response.ok) throw new Error(`API Magazord (Contatos) falhou na página ${page}: ${response.status}`);
       const result = await response.json();
       const contacts = result.data?.items || [];
+      
+      await appendLogs(supabaseAdmin, jobId, [`${timestamp()}  - Página ${page}: ${contacts.length} contatos recebidos da Magazord.`]);
+
       if (contacts.length === 0) { stopProcessing = true; break; }
 
+      const magazordIdsInBatch = contacts.map((c: any) => String(c.id));
+      const { data: existingContacts, error: existingError } = await supabaseAdmin.from('magazord_contacts').select('magazord_id').in('magazord_id', magazordIdsInBatch);
+      if (existingError) throw existingError;
+
+      const existingMagazordIds = new Set(existingContacts.map(c => c.magazord_id));
+      const newContactsToInsert = [];
+      let foundExistingInIncremental = false;
+
       for (const contact of contacts) {
-        const { data: existing } = await supabaseAdmin.from('magazord_contacts').select('id').eq('magazord_id', String(contact.id)).maybeSingle();
-        if (existing) {
-          if (!full_sync) { stopProcessing = true; break; }
+        const magazordId = String(contact.id);
+        if (existingMagazordIds.has(magazordId)) {
+          if (!full_sync) { foundExistingInIncremental = true; }
           continue;
         }
-        const { data: newContact, error } = await supabaseAdmin.from('magazord_contacts').insert({
+        newContactsToInsert.push({
           nome: contact.nome, email: contact.email, cpf_cnpj: contact.cpfCnpj,
           tipo_pessoa: contact.tipo === 1 ? 'F' : 'J', sexo: contact.sexo,
-          magazord_id: String(contact.id), telefone: contact.pessoaContato?.[0]?.contato || null
-        }).select('id').single();
-        if (error) {
-          await appendLogs(supabaseAdmin, jobId, [`${timestamp()}  - ERRO ao inserir contato ${contact.id}: ${error.message}`]);
+          magazord_id: magazordId, telefone: contact.pessoaContato?.[0]?.contato || null
+        });
+      }
+
+      if (newContactsToInsert.length > 0) {
+        const { data: insertedContacts, error: insertError } = await supabaseAdmin.from('magazord_contacts').insert(newContactsToInsert).select('id');
+        if (insertError) {
+          await appendLogs(supabaseAdmin, jobId, [`${timestamp()}  - ERRO ao inserir lote de contatos: ${insertError.message}`]);
         } else {
-          newContactsCount++;
-          contactsToSyncWithMautic.add(newContact.id);
+          newContactsCount += insertedContacts.length;
+          for (const newContact of insertedContacts) { contactsToSyncWithMautic.add(newContact.id); }
+          await appendLogs(supabaseAdmin, jobId, [`${timestamp()}  - ${insertedContacts.length} novos contatos inseridos no banco.`]);
         }
       }
+      
+      if (foundExistingInIncremental) { stopProcessing = true; }
+
       if (stopProcessing) {
         await appendLogs(supabaseAdmin, jobId, [`${timestamp()} Contato existente encontrado. Finalizando busca (modo incremental).`]);
       } else {
