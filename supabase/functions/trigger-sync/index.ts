@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { crypto } from "https://deno.land/std@0.150.0/crypto/mod.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -18,23 +17,13 @@ serve(async (_req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const token = crypto.randomUUID();
-
-    const { error: tokenError } = await supabaseAdmin
-      .from('sync_tokens')
-      .insert({ token: token });
-
-    if (tokenError) throw tokenError;
-
-    // Invocando a função com o token no cabeçalho para maior robustez
-    const { error: invokeError } = await supabaseAdmin.functions.invoke('incremental-sync', {
-      headers: { 'X-Sync-Token': token },
-    });
+    // Invoca diretamente a função de sincronização, sem o sistema de tokens.
+    const { error: invokeError } = await supabaseAdmin.functions.invoke('incremental-sync');
 
     if (invokeError) throw invokeError;
 
     return new Response(
-      JSON.stringify({ success: true, message: 'Sync triggered successfully.' }),
+      JSON.stringify({ success: true, message: 'Sincronização iniciada com sucesso.' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     )
   } catch (error) {

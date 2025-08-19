@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-sync-token',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
 const PAGE_LIMIT = 100;
@@ -20,6 +20,22 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
 
+  // Trava de segurança: verifica se já existe uma sincronização em andamento.
+  const { data: runningJobs, error: runningJobsError } = await supabaseAdmin
+    .from('sync_jobs')
+    .select('id')
+    .eq('status', 'running');
+
+  if (runningJobsError) {
+    console.error('Erro ao verificar jobs em andamento:', runningJobsError);
+    return new Response(JSON.stringify({ success: false, error: 'Não foi possível verificar jobs em andamento.' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  if (runningJobs && runningJobs.length > 0) {
+    console.log('Sincronização já em progresso. Pulando esta execução.');
+    return new Response(JSON.stringify({ success: true, message: 'Sincronização já em progresso. Ignorado.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
   const { data: job, error: createJobError } = await supabaseAdmin
     .from('sync_jobs')
     .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização iniciada.`] })
@@ -33,26 +49,7 @@ serve(async (req) => {
   const jobId = job.id;
 
   try {
-    const token = req.headers.get('x-sync-token');
-    if (!token) {
-      throw new Error('Token de sincronização ausente no cabeçalho. A execução não pode continuar.');
-    }
-
-    const { data: tokenData, error: findError } = await supabaseAdmin
-      .from('sync_tokens')
-      .select('id, used_at')
-      .eq('token', token)
-      .single();
-
-    if (findError || !tokenData) throw new Error('Token de sincronização inválido.');
-    if (tokenData.used_at) throw new Error('Token de sincronização já utilizado.');
-
-    const { error: updateError } = await supabaseAdmin
-      .from('sync_tokens')
-      .update({ used_at: new Date().toISOString() })
-      .eq('id', tokenData.id);
-
-    if (updateError) throw new Error('Falha ao validar o token de segurança.');
+    // Lógica de validação de token foi REMOVIDA.
 
     const magazordApiToken = Deno.env.get('MAGAZORD_API_TOKEN');
     const magazordApiSecret = Deno.env.get('MAGAZORD_API_SECRET');
