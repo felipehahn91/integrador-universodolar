@@ -20,6 +20,40 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
 
+  // --- TOKEN VALIDATION START ---
+  try {
+    const { token } = await req.json();
+    if (!token) {
+      throw new Error('Missing sync token.');
+    }
+
+    const { data: tokenData, error: findError } = await supabaseAdmin
+      .from('sync_tokens')
+      .select('id, used_at')
+      .eq('token', token)
+      .single();
+
+    if (findError || !tokenData) {
+      throw new Error('Invalid sync token.');
+    }
+
+    if (tokenData.used_at) {
+      throw new Error('Sync token already used.');
+    }
+
+    const { error: updateError } = await supabaseAdmin
+      .from('sync_tokens')
+      .update({ used_at: new Date().toISOString() })
+      .eq('id', tokenData.id);
+
+    if (updateError) {
+      throw new Error('Failed to validate token.');
+    }
+  } catch (authError) {
+    return new Response(JSON.stringify({ success: false, error: `Authentication failed: ${authError.message}` }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+  // --- TOKEN VALIDATION END ---
+
   const { data: job, error: createJobError } = await supabaseAdmin
     .from('sync_jobs')
     .insert({ status: 'running', full_sync: false, logs: [`${timestamp()} Sincronização automática iniciada.`] })
