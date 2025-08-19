@@ -17,7 +17,7 @@ const PAGE_SIZE = 15;
 const fetchFilteredContacts = async (page: number, filters: Filters) => {
   const [sortBy, sortDirection] = filters.sortBy.split('_');
   
-  const { data, error } = await supabase.rpc('get_filtered_contacts_with_stats', {
+  const { data, error } = await supabase.rpc('search_contacts', {
     p_search_term: filters.searchTerm || null,
     p_order_status_id: filters.orderStatus === 'all' ? null : Number(filters.orderStatus),
     p_has_orders: filters.hasOrders,
