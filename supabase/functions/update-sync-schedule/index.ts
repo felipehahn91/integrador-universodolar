@@ -26,43 +26,42 @@ serve(async (req) => {
     const jobName = 'regular-sync';
     const cronPattern = `0 */${intervalHours} * * *`;
 
-    // 1. Unschedule existing job
-    try {
-      // This RPC throws an error if the job is not found, so we catch it.
-      const { error: unscheduleError } = await supabaseAdmin.rpc('cron.unschedule', { job_name: jobName });
-      // We only want to throw errors that are not "job not found".
-      if (unscheduleError && !unscheduleError.message.includes('job not found')) {
-        throw unscheduleError;
-      }
-    } catch (e) {
-        // Also catch network or other errors during unschedule
-        if (e.message && !e.message.includes('job not found')) {
-            throw e;
-        }
+    // 1. Unschedule the existing job. It's okay if it doesn't exist.
+    const { error: unscheduleError } = await supabaseAdmin.rpc('cron.unschedule', { job_name: jobName });
+    if (unscheduleError && !unscheduleError.message.includes('job not found')) {
+      // If there's an error, and it's not the expected "job not found", then it's a real problem.
+      throw unscheduleError;
     }
 
-    // 2. Construct the new command safely
+    // 2. Construct the headers JSON. The service_role_key is passed as a Bearer token.
     const headersJsonString = JSON.stringify({
       "Content-Type": "application/json",
-      "apikey": serviceKey
+      "Authorization": `Bearer ${serviceKey}`
     });
 
-    // Use dollar-quoting ($$) to prevent issues with special characters in the headers
+    // Use a unique dollar-quoting tag to safely pass the JSON string to SQL.
+    const uniqueTag = `$HEADERS$`;
+
+    // 3. Construct the full SQL command to be executed by the cron job.
     const command = `
       SELECT net.http_post(
           url:='${supabaseUrl}/functions/v1/incremental-sync',
-          headers:=${'$$'}${headersJsonString}${'$$'}
+          body:='{}'::jsonb, -- http_post requires a body, so we send an empty one.
+          headers:=${uniqueTag}${headersJsonString}${uniqueTag}::jsonb
       )
     `;
 
-    // 3. Schedule the new job
+    // 4. Schedule the new job with the updated command and interval.
     const { error: scheduleError } = await supabaseAdmin.rpc('cron.schedule', {
       job_name: jobName,
       schedule: cronPattern,
       command: command
     });
 
-    if (scheduleError) throw scheduleError;
+    if (scheduleError) {
+      // If scheduling fails, throw the error to be caught below.
+      throw scheduleError;
+    }
 
     return new Response(
       JSON.stringify({ success: true, message: `Sincronização agendada para cada ${intervalHours} hora(s).` }),
