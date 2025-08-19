@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Clock, RefreshCw, Users as UsersIcon } from "lucide-react";
 import { showError, showLoading, showSuccess } from "@/utils/toast";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
 const fetchSyncHistory = async () => {
   const { data, error } = await supabase
@@ -51,14 +52,20 @@ const Dashboard = () => {
     const toastId = showLoading("Iniciando sincronização completa...");
 
     try {
-      const { error } = await supabase.functions.invoke('incremental-sync', {
+      const { data, error } = await supabase.functions.invoke('start-sync', {
         body: { full_sync: true }
       });
       if (error) {
         throw new Error(`Falha na sincronização: ${error.message}`);
       }
 
-      showSuccess("Sincronização completa iniciada com sucesso! Acompanhe pelo histórico.", { id: toastId });
+      toast.success("Sincronização iniciada! Acompanhe o progresso aqui ou nos detalhes do job.", {
+        id: toastId,
+        action: {
+          label: "Ver Job",
+          onClick: () => navigate(`/sync-job/${data.jobId}`),
+        },
+      });
       queryClient.invalidateQueries({ queryKey: ['sync_history'] });
       queryClient.invalidateQueries({ queryKey: ['contact_stats'] });
 
