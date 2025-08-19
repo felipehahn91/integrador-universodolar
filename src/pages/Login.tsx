@@ -27,11 +27,16 @@ const Login = () => {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-50">
-      <div className="w-full max-w-md p-8 space-y-8 bg-white rounded-lg shadow-md">
+    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary/10 via-white to-secondary/10">
+      <div className="w-full max-w-md p-8 space-y-6 bg-white rounded-2xl shadow-2xl">
+        <img src="/logo.webp" alt="Universo do Lar Logo" className="w-48 mx-auto" />
+
         {view === 'sign_in' && (
           <>
-            <h1 className="text-2xl font-bold text-center">Bem-vindo</h1>
+            <div className="text-center">
+              <h1 className="text-2xl font-bold text-gray-900">Bem-vindo de volta!</h1>
+              <p className="text-sm text-gray-500">Acesse sua conta para continuar</p>
+            </div>
             <Auth
               supabaseClient={supabase}
               appearance={{ theme: ThemeSupa }}
@@ -51,7 +56,7 @@ const Login = () => {
             <div className="text-center">
               <button
                 onClick={handleForgotPassword}
-                className="text-sm text-gray-600 hover:text-black underline"
+                className="text-sm text-gray-600 hover:text-primary underline"
               >
                 Esqueceu sua senha?
               </button>
@@ -61,7 +66,10 @@ const Login = () => {
 
         {view === 'forgotten_password' && (
           <>
-            <h1 className="text-2xl font-bold text-center">Recuperar Senha</h1>
+            <div className="text-center">
+              <h1 className="text-2xl font-bold text-gray-900">Recuperar Senha</h1>
+              <p className="text-sm text-gray-500">Insira seu email para receber as instruções</p>
+            </div>
             <Auth
               supabaseClient={supabase}
               appearance={{ theme: ThemeSupa }}
@@ -80,7 +88,7 @@ const Login = () => {
             <div className="text-center">
               <button
                 onClick={handleBackToLogin}
-                className="text-sm text-gray-600 hover:text-black underline"
+                className="text-sm text-gray-600 hover:text-primary underline"
               >
                 Voltar para o login
               </button>
