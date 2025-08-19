@@ -45,7 +45,7 @@ serve(async (req) => {
       command: `
         SELECT net.http_post(
             url:='${Deno.env.get('SUPABASE_URL')}/functions/v1/incremental-sync',
-            headers:='{"Content-Type": "application/json", "apikey": "${Deno.env.get('SUPABASE_ANON_KEY')}"}'
+            headers:='{"Content-Type": "application/json", "apikey": "${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}"}'
         )
       `
     });
