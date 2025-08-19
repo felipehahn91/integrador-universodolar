@@ -21,6 +21,8 @@ const Settings = () => {
   const [backfillProgress, setBackfillProgress] = useState<{ currentPage: number, totalPages: number } | null>(null);
   const [isUpdatingContacts, setIsUpdatingContacts] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<{ currentPage: number, totalPages: number } | null>(null);
+  const [isBackfillingMautic, setIsBackfillingMautic] = useState(false);
+  const [mauticBackfillProgress, setMauticBackfillProgress] = useState<{ currentPage: number, totalPages: number } | null>(null);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -146,6 +148,46 @@ const Settings = () => {
     }
   };
 
+  const handleMauticBackfill = async () => {
+    setIsBackfillingMautic(true);
+    const toastId = showLoading("Iniciando sincronização da base de contatos com o Mautic...");
+
+    try {
+      const { count, error: countError } = await supabase
+        .from('magazord_contacts')
+        .select('*', { count: 'exact', head: true });
+
+      if (countError) throw countError;
+      if (!count || count === 0) {
+        toast.success("Nenhum contato para sincronizar.", { id: toastId });
+        return;
+      }
+
+      const totalPages = Math.ceil(count / BATCH_SIZE);
+      
+      for (let page = 1; page <= totalPages; page++) {
+        setMauticBackfillProgress({ currentPage: page, totalPages });
+        toast.loading(`Enviando lote ${page} de ${totalPages} para o Mautic...`, { id: toastId });
+        
+        const { error: invokeError } = await supabase.functions.invoke('mautic-backfill', {
+          body: { page },
+        });
+
+        if (invokeError) {
+          throw new Error(`Erro no lote ${page}: ${invokeError.message}`);
+        }
+      }
+
+      toast.success("Sincronização da base de contatos com o Mautic concluída!", { id: toastId });
+    } catch (error) {
+      showError(`Falha na sincronização com o Mautic: ${error.message}`);
+      toast.dismiss(toastId);
+    } finally {
+      setIsBackfillingMautic(false);
+      setMauticBackfillProgress(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -188,6 +230,16 @@ const Settings = () => {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div>
+            <h3 className="font-semibold mb-2">Sincronização Histórica com Mautic</h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              Enviar toda a base de contatos existente para o Mautic. Use esta opção uma vez para popular o Mautic com dados antigos.
+            </p>
+            <Button onClick={handleMauticBackfill} disabled={isBackfillingMautic}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isBackfillingMautic ? 'animate-spin' : ''}`} />
+              {isBackfillingMautic ? `Enviando... ${mauticBackfillProgress ? `${mauticBackfillProgress.currentPage}/${mauticBackfillProgress.totalPages}` : ''}` : "Sincronizar Base Completa com Mautic"}
+            </Button>
+          </div>
           <div>
             <h3 className="font-semibold mb-2">Atualizar Detalhes dos Contatos</h3>
             <p className="text-sm text-muted-foreground mb-3">
