@@ -40,13 +40,6 @@ const getMauticTagForStatus = (status: string): string | null => {
   return null;
 };
 
-const ALL_STATUS_TAGS = [
-  'pedido-aguardando-pagamento',
-  'pedido-em-processamento',
-  'pedido-entregue',
-  'pedido-cancelado'
-];
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -69,7 +62,6 @@ serve(async (req) => {
       throw new Error('Parâmetros page, jobId ou totalPages ausentes.');
     }
 
-    // Get Mautic credentials from secrets
     const mauticUrl = Deno.env.get('MAUTIC_URL');
     const mauticClientId = Deno.env.get('MAUTIC_CLIENT_ID');
     const mauticClientSecret = Deno.env.get('MAUTIC_CLIENT_SECRET');
@@ -77,7 +69,6 @@ serve(async (req) => {
       throw new Error("Credenciais do Mautic (URL, CLIENT_ID, CLIENT_SECRET) não configuradas.");
     }
 
-    // Get Mautic access token for this batch
     const accessToken = await getMauticToken(mauticUrl, mauticClientId, mauticClientSecret);
     const mauticHeaders = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
 
@@ -105,50 +96,41 @@ serve(async (req) => {
         }
 
         const { data: latestOrder } = await supabaseAdmin.from('magazord_orders').select('status').eq('contact_id', contact.id).order('data_pedido', { ascending: false }).limit(1).single();
-        if (!latestOrder) {
-          logs.push(`${timestamp()}  - Aviso: Nenhum pedido encontrado para ${contact.email}. Pulando sincronização de tags.`);
-          continue;
-        }
-
+        
         try {
-          // Search for contact in Mautic
+          const newTag = latestOrder ? getMauticTagForStatus(latestOrder.status) : null;
+
           const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
           const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
           const searchResult = await searchResponse.json();
-          let mauticContactId: number;
-
+          
           const nomeCompleto = contact.nome || '';
           const nomeParts = nomeCompleto.split(' ').filter(Boolean);
-          const contactPayload = {
+          const contactPayload: any = {
             firstname: nomeParts[0] || '',
             lastname: nomeParts.slice(1).join(' ') || '',
             email: contact.email,
-            idmagazord: parseInt(contact.magazord_id, 10),
+            idmagazord: contact.magazord_id,
             company: "Universo do Lar",
           };
 
-          // Create or update contact
+          if (newTag) {
+            contactPayload.tags = [newTag];
+          }
+
           if (searchResult.total > 0) {
-            mauticContactId = Object.keys(searchResult.contacts)[0];
+            const mauticContactId = Object.keys(searchResult.contacts)[0];
             const updateUrl = `${mauticUrl}/api/contacts/${mauticContactId}/edit`;
             const updateResponse = await fetch(updateUrl, { method: 'PATCH', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
             if (!updateResponse.ok) throw new Error(`Falha ao ATUALIZAR contato ${mauticContactId}: ${await updateResponse.text()}`);
+            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) atualizado ${newTag ? `com a tag ${newTag}` : 'sem nova tag'}.`);
           } else {
             const createUrl = `${mauticUrl}/api/contacts/new`;
             const createResponse = await fetch(createUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
             if (!createResponse.ok) throw new Error(`Falha ao CRIAR contato: ${await createResponse.text()}`);
             const createResult = await createResponse.json();
-            mauticContactId = createResult.contact.id;
-          }
-
-          // Manage tags - ONLY ADD, DO NOT REMOVE
-          const newTag = getMauticTagForStatus(latestOrder.status);
-          if (newTag) {
-            const addUrl = `${mauticUrl}/api/contacts/${mauticContactId}/tags/add`;
-            await fetch(addUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify({ tags: [newTag] }) });
-            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) adicionada a tag ${newTag}.`);
-          } else {
-            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) criado/atualizado. Status do pedido '${latestOrder.status}' ignorado.`);
+            const mauticContactId = createResult.contact.id;
+            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) criado ${newTag ? `com a tag ${newTag}` : 'sem tag'}.`);
           }
           processedInBatch++;
         } catch (syncError) {
@@ -176,6 +158,6 @@ serve(async (req) => {
     const finalLog = `${timestamp()} ERRO FATAL no lote ${page}: ${error.message}`;
     await supabaseAdmin.from('sync_jobs').update({ status: 'failed', finished_at: new Date().toISOString() }).eq('id', jobId);
     await appendLogs(jobId, [finalLog]);
-    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Tfype': 'application/json' } });
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 })
