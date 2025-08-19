@@ -85,21 +85,21 @@ serve(async (req) => {
       const { data: existingContacts, error: existingError } = await supabaseAdmin.from('magazord_contacts').select('magazord_id').in('magazord_id', magazordIdsInBatch);
       if (existingError) throw existingError;
 
-      const existingMagazordIds = new Set(existingContacts.map(c => c.magazord_id));
-      const newContactsToInsert = [];
+      // Se não for uma sincronização completa e encontrarmos contatos que já existem, marcamos para parar.
+      if (!full_sync && existingContacts.length > 0) {
+        foundExistingInIncremental = true;
+        await appendLogs(supabaseAdmin, jobId, [`${timestamp()}  - Contato existente encontrado. A busca por novos contatos será interrompida.`]);
+      }
 
-      for (const contact of contacts) {
-        const magazordId = String(contact.id);
-        if (existingMagazordIds.has(magazordId)) {
-          if (!full_sync) { foundExistingInIncremental = true; }
-          continue;
-        }
-        newContactsToInsert.push({
+      const existingMagazordIds = new Set(existingContacts.map(c => c.magazord_id));
+      const newContactsToInsert = contacts
+        .filter((contact: any) => !existingMagazordIds.has(String(contact.id)))
+        .map((contact: any) => ({
           nome: contact.nome, email: contact.email, cpf_cnpj: contact.cpfCnpj,
           tipo_pessoa: contact.tipo === 1 ? 'F' : 'J', sexo: contact.sexo,
-          magazord_id: magazordId, telefone: contact.pessoaContato?.[0]?.contato || null
-        });
-      }
+          magazord_id: String(contact.id), telefone: contact.pessoaContato?.[0]?.contato || null
+        }));
+
 
       if (newContactsToInsert.length > 0) {
         const { data: insertedContacts, error: insertError } = await supabaseAdmin.from('magazord_contacts').insert(newContactsToInsert).select('id');
