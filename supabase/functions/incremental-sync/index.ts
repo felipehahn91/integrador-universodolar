@@ -71,13 +71,21 @@ serve(async (req) => {
           break; 
         }
 
+        const getTelefone = (c: any) => {
+          if (c.pessoaContato && Array.isArray(c.pessoaContato) && c.pessoaContato.length > 0) {
+            return c.pessoaContato[0].contato;
+          }
+          return null;
+        };
+
         const contactData = { 
           nome: contact.nome, 
           email: contact.email, 
           cpf_cnpj: contact.cpfCnpj, 
           tipo_pessoa: contact.tipo === 1 ? 'F' : (contact.tipo === 2 ? 'J' : null), 
           sexo: contact.sexo,
-          magazord_id: magazordContactId
+          magazord_id: magazordContactId,
+          telefone: getTelefone(contact)
         };
         const { data: newContact, error: insertError } = await supabaseAdmin
           .from('magazord_contacts')
@@ -89,7 +97,6 @@ serve(async (req) => {
         
         newRecordsCount++;
 
-        // ** NOVO: Buscar e salvar pedidos do contato recém-criado **
         if (newContact && newContact.cpf_cnpj) {
           try {
             const ordersEndpoint = `${magazordBaseUrl}/v2/site/pedido?cpfCnpj=${newContact.cpf_cnpj}`;
@@ -110,7 +117,6 @@ serve(async (req) => {
 
                 await supabaseAdmin.from('magazord_orders').insert(ordersToInsert);
 
-                // ** NOVO: Calcular totais e atualizar o contato **
                 const totalCompras = orders.length;
                 const valorTotalGasto = orders.reduce((sum: number, order: any) => sum + parseFloat(order.valorTotal), 0);
 
@@ -121,7 +127,6 @@ serve(async (req) => {
               }
             }
           } catch (orderError) {
-            // Loga o erro mas não para a sincronização inteira
             console.error(`Falha ao buscar pedidos para o contato ${newContact.id}:`, orderError.message);
           }
         }
