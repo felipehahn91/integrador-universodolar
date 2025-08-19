@@ -22,7 +22,8 @@ const fetchFilteredContacts = async (page: number, filters: Filters) => {
     .select('id, nome, email, created_at, valor_total_gasto', { count: 'exact' });
 
   if (filters.searchTerm) {
-    query = query.or(`nome.ilike.%${filters.searchTerm}%,email.ilike.%${filters.searchTerm}%`);
+    const searchTerm = filters.searchTerm;
+    query = query.or(`nome.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%`);
   }
 
   query = query.order(sortBy, { ascending: sortDirection === 'asc' });
@@ -30,7 +31,10 @@ const fetchFilteredContacts = async (page: number, filters: Filters) => {
 
   const { data, error, count } = await query;
 
-  if (error) throw new Error(`Erro na busca: ${error.message}`);
+  if (error) {
+    console.error("Supabase query error:", error);
+    throw new Error(`Erro na busca: ${error.message}`);
+  }
   
   return { contacts: data, count };
 };
@@ -48,7 +52,7 @@ const Contacts = () => {
     setFilters(prev => ({ ...prev, ...newFilters }));
   };
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ["filtered_contacts", currentPage, filters],
     queryFn: () => fetchFilteredContacts(currentPage, filters),
     keepPreviousData: true,
@@ -67,71 +71,79 @@ const Contacts = () => {
         </CardHeader>
         <CardContent>
           <ContactFilters filters={filters} onFiltersChange={handleFiltersChange} />
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Nome</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Data de Cadastro</TableHead>
-                <TableHead className="text-right">Total Gasto</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                Array.from({ length: 10 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell><Skeleton className="h-4 w-40" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-52" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                    <TableCell className="text-right"><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
+          {isError ? (
+            <div className="text-center py-8 text-red-600">
+              <p>Ocorreu um erro ao buscar os contatos. Tente novamente.</p>
+            </div>
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Nome</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Data de Cadastro</TableHead>
+                    <TableHead className="text-right">Total Gasto</TableHead>
                   </TableRow>
-                ))
-              ) : contacts && contacts.length > 0 ? (
-                contacts.map((contact: any) => (
-                  <TableRow
-                    key={contact.id}
-                    onClick={() => navigate(`/contact/${contact.id}`)}
-                    className="cursor-pointer hover:bg-muted/50"
-                  >
-                    <TableCell>{contact.nome}</TableCell>
-                    <TableCell>{contact.email}</TableCell>
-                    <TableCell>
-                      {contact.created_at ? format(new Date(contact.created_at), "dd/MM/yyyy", { locale: ptBR }) : '—'}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {Number(contact.valor_total_gasto).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </TableCell>
-                  </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-center">Nenhum contato encontrado com os filtros aplicados.</TableCell>
-                </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isLoading ? (
+                    Array.from({ length: 10 }).map((_, i) => (
+                      <TableRow key={i}>
+                        <TableCell><Skeleton className="h-4 w-40" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-52" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                        <TableCell className="text-right"><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
+                      </TableRow>
+                    ))
+                  ) : contacts && contacts.length > 0 ? (
+                    contacts.map((contact: any) => (
+                      <TableRow
+                        key={contact.id}
+                        onClick={() => navigate(`/contact/${contact.id}`)}
+                        className="cursor-pointer hover:bg-muted/50"
+                      >
+                        <TableCell>{contact.nome}</TableCell>
+                        <TableCell>{contact.email}</TableCell>
+                        <TableCell>
+                          {contact.created_at ? format(new Date(contact.created_at), "dd/MM/yyyy", { locale: ptBR }) : '—'}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {Number(contact.valor_total_gasto).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center">Nenhum contato encontrado com os filtros aplicados.</TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+              {totalPages > 1 && (
+                <Pagination className="mt-4">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.max(p - 1, 1)); }}
+                        className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    <PaginationItem className="text-sm text-muted-foreground">
+                      Página {currentPage} de {totalPages}
+                    </PaginationItem>
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.min(p + 1, totalPages)); }}
+                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               )}
-            </TableBody>
-          </Table>
-          {totalPages > 1 && (
-            <Pagination className="mt-4">
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    href="#"
-                    onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.max(p - 1, 1)); }}
-                    className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
-                  />
-                </PaginationItem>
-                <PaginationItem className="text-sm text-muted-foreground">
-                  Página {currentPage} de {totalPages}
-                </PaginationItem>
-                <PaginationItem>
-                  <PaginationNext
-                    href="#"
-                    onClick={(e) => { e.preventDefault(); setCurrentPage((p) => Math.min(p + 1, totalPages)); }}
-                    className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
+            </>
           )}
         </CardContent>
       </Card>
