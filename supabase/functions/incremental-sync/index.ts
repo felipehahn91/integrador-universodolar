@@ -35,7 +35,13 @@ serve(async (req) => {
 
   try {
     // ETAPA 2: Validar o token de segurança.
-    const { token } = await req.json();
+    const requestBodyText = await req.text();
+    if (!requestBodyText) {
+      throw new Error('Corpo da requisição está vazio.');
+    }
+    const bodyJSON = JSON.parse(requestBodyText);
+    const token = bodyJSON.token;
+
     if (!token) {
       throw new Error('Token de sincronização ausente. A execução não pode continuar.');
     }
@@ -162,7 +168,10 @@ serve(async (req) => {
           }
         }
       }
-      currentPage++;
+      
+      if (!stopSync) {
+        currentPage++;
+      }
     }
 
     const finalLog = `${timestamp()} Sincronização concluída. ${newRecordsCount} novos contatos adicionados.`;
