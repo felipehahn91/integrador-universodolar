@@ -10,6 +10,43 @@ const BATCH_SIZE = 25;
 const API_DELAY_MS = 500;
 const timestamp = () => `[${new Date().toLocaleTimeString('pt-BR', { hour12: false })}]`;
 
+// Helper function to get Mautic OAuth2 token
+const getMauticToken = async (mauticUrl: string, clientId: string, clientSecret: string) => {
+  const tokenUrl = `${mauticUrl}/oauth/v2/token`;
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+    }),
+  });
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Falha ao obter token do Mautic: ${response.status} ${errorBody}`);
+  }
+  const data = await response.json();
+  return data.access_token;
+};
+
+// Mautic tag mapping logic
+const getMauticTagForStatus = (status: string): string | null => {
+  const s = status.toLowerCase();
+  if (s.includes('aguardando pagamento') || s.includes('análise de pagamento')) return 'pedido-aguardando-pagamento';
+  if (s.includes('aprovado') || s.includes('nota fiscal emitida') || s.includes('em transporte')) return 'pedido-em-processamento';
+  if (s.includes('entregue')) return 'pedido-entregue';
+  if (s.includes('cancelado')) return 'pedido-cancelado';
+  return null;
+};
+
+const ALL_STATUS_TAGS = [
+  'pedido-aguardando-pagamento',
+  'pedido-em-processamento',
+  'pedido-entregue',
+  'pedido-cancelado'
+];
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -32,6 +69,18 @@ serve(async (req) => {
       throw new Error('Parâmetros page, jobId ou totalPages ausentes.');
     }
 
+    // Get Mautic credentials from secrets
+    const mauticUrl = Deno.env.get('MAUTIC_URL');
+    const mauticClientId = Deno.env.get('MAUTIC_CLIENT_ID');
+    const mauticClientSecret = Deno.env.get('MAUTIC_CLIENT_SECRET');
+    if (!mauticUrl || !mauticClientId || !mauticClientSecret) {
+      throw new Error("Credenciais do Mautic (URL, CLIENT_ID, CLIENT_SECRET) não configuradas.");
+    }
+
+    // Get Mautic access token for this batch
+    const accessToken = await getMauticToken(mauticUrl, mauticClientId, mauticClientSecret);
+    const mauticHeaders = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+
     const from = (page - 1) * BATCH_SIZE;
     const to = from + BATCH_SIZE - 1;
     let logs: string[] = [`${timestamp()} Processando lote ${page} de ${totalPages}. Buscando contatos de ${from} a ${to}...`];
@@ -45,35 +94,70 @@ serve(async (req) => {
     if (contactsError) throw contactsError;
     if (!contacts || contacts.length === 0) {
       logs.push(`${timestamp()} Nenhum contato encontrado neste lote.`);
-      await appendLogs(jobId, logs);
     } else {
       logs.push(`${timestamp()} ${contacts.length} contatos encontrados. Sincronizando com Mautic...`);
       let processedInBatch = 0;
-      const supabaseUrl = Deno.env.get('SUPABASE_URL');
-      const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-      const mauticSyncUrl = `${supabaseUrl}/functions/v1/mautic-sync`;
 
       for (const contact of contacts) {
+        if (!contact.email) {
+          logs.push(`${timestamp()}  - Aviso: Contato ${contact.magazord_id} pulado por não ter email.`);
+          continue;
+        }
+
         const { data: latestOrder } = await supabaseAdmin.from('magazord_orders').select('status').eq('contact_id', contact.id).order('data_pedido', { ascending: false }).limit(1).single();
-        if (latestOrder) {
-          try {
-            const response = await fetch(mauticSyncUrl, {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${serviceRoleKey}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contact: contact, orderStatus: latestOrder.status })
-            });
-            const responseData = await response.json();
-            if (!response.ok) {
-              logs.push(`${timestamp()}  - ERRO ${contact.email}: ${responseData.error?.message || JSON.stringify(responseData)}`);
-            } else {
-              logs.push(`${timestamp()}  - Sucesso: ${contact.email} - ${responseData.message}`);
+        if (!latestOrder) {
+          logs.push(`${timestamp()}  - Aviso: Nenhum pedido encontrado para ${contact.email}. Pulando sincronização de tags.`);
+          continue;
+        }
+
+        try {
+          // Search for contact in Mautic
+          const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
+          const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
+          const searchResult = await searchResponse.json();
+          let mauticContactId: number;
+
+          const nomeCompleto = contact.nome || '';
+          const nomeParts = nomeCompleto.split(' ').filter(Boolean);
+          const contactPayload = {
+            firstname: nomeParts[0] || '',
+            lastname: nomeParts.slice(1).join(' ') || '',
+            email: contact.email,
+            idmagazord: parseInt(contact.magazord_id, 10),
+            company: "Universo do Lar",
+          };
+
+          // Create or update contact
+          if (searchResult.total > 0) {
+            mauticContactId = Object.keys(searchResult.contacts)[0];
+            const updateUrl = `${mauticUrl}/api/contacts/${mauticContactId}/edit`;
+            const updateResponse = await fetch(updateUrl, { method: 'PATCH', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
+            if (!updateResponse.ok) throw new Error(`Falha ao ATUALIZAR contato ${mauticContactId}: ${await updateResponse.text()}`);
+          } else {
+            const createUrl = `${mauticUrl}/api/contacts/new`;
+            const createResponse = await fetch(createUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
+            if (!createResponse.ok) throw new Error(`Falha ao CRIAR contato: ${await createResponse.text()}`);
+            const createResult = await createResponse.json();
+            mauticContactId = createResult.contact.id;
+          }
+
+          // Manage tags
+          const newTag = getMauticTagForStatus(latestOrder.status);
+          if (newTag) {
+            const tagsToRemove = ALL_STATUS_TAGS.filter(t => t !== newTag);
+            if (tagsToRemove.length > 0) {
+              const removeUrl = `${mauticUrl}/api/contacts/${mauticContactId}/tags/remove`;
+              await fetch(removeUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify({ tags: tagsToRemove }) });
             }
-          } catch (fetchError) {
-            logs.push(`${timestamp()}  - ERRO DE REDE ${contact.email}: ${fetchError.message}`);
+            const addUrl = `${mauticUrl}/api/contacts/${mauticContactId}/tags/add`;
+            await fetch(addUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify({ tags: [newTag] }) });
+            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) atualizado com a tag ${newTag}.`);
+          } else {
+            logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) criado/atualizado. Status do pedido '${latestOrder.status}' ignorado.`);
           }
           processedInBatch++;
-        } else {
-          logs.push(`${timestamp()}  - Aviso: Nenhum pedido encontrado para ${contact.email}. Pulando.`);
+        } catch (syncError) {
+          logs.push(`${timestamp()}  - ERRO ${contact.email}: ${syncError.message}`);
         }
         await new Promise(resolve => setTimeout(resolve, API_DELAY_MS));
       }
@@ -83,20 +167,20 @@ serve(async (req) => {
     await appendLogs(jobId, logs);
     await supabaseAdmin.from('sync_jobs').update({ last_processed_page: page, processed_count: (page * BATCH_SIZE) }).eq('id', jobId);
 
-    // Se não for a última página, chama a próxima
     if (page < totalPages) {
       await supabaseAdmin.functions.invoke('mautic-backfill-worker', {
         body: { page: page + 1, jobId, totalPages }
       });
     } else {
-      // Se for a última página, finaliza o job
       await supabaseAdmin.from('sync_jobs').update({ status: 'completed', finished_at: new Date().toISOString() }).eq('id', jobId);
     }
 
     return new Response(JSON.stringify({ success: true, message: `Lote ${page} processado.` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    await supabaseAdmin.from('sync_jobs').update({ status: 'failed', finished_at: new Date().toISOString(), logs: [`${timestamp()} ERRO FATAL no lote ${page}: ${error.message}`] }).eq('id', jobId);
+    const finalLog = `${timestamp()} ERRO FATAL no lote ${page}: ${error.message}`;
+    await supabaseAdmin.from('sync_jobs').update({ status: 'failed', finished_at: new Date().toISOString() }).eq('id', jobId);
+    await appendLogs(jobId, [finalLog]);
     return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 })
