@@ -49,7 +49,8 @@ const Dashboard = () => {
     setIsSyncing(true);
     const toastId = showLoading("Iniciando sincronização manual...");
     
-    const { error } = await supabase.functions.invoke('trigger-sync');
+    // Chamando a função principal diretamente
+    const { error } = await supabase.functions.invoke('incremental-sync');
     
     toast.dismiss(toastId);
 
