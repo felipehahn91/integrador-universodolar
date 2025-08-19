@@ -24,7 +24,10 @@ const getMauticToken = async (mauticUrl: string, clientId: string, clientSecret:
       client_secret: clientSecret,
     }),
   });
-  if (!response.ok) throw new Error(`Falha ao obter token do Mautic: ${response.status} ${await response.text()}`);
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Falha ao obter token do Mautic: ${response.status} ${errorBody}`);
+  }
   return (await response.json()).access_token;
 };
 
@@ -126,17 +129,30 @@ serve(async (req) => {
             firstname: nomeParts[0] || '', lastname: nomeParts.slice(1).join(' ') || '',
             email: contact.email, idmagazord: String(contact.magazord_id), company: "Universo do Lar",
           };
-          if (newTag) contactPayload.tags = [{ tag: newTag }];
+          if (newTag) contactPayload.tags = [newTag];
 
           try {
             const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
             const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
+            if (!searchResponse.ok) {
+                const errorBody = await searchResponse.text();
+                throw new Error(`Falha ao BUSCAR contato: ${searchResponse.status} ${errorBody}`);
+            }
             const searchResult = await searchResponse.json();
+
             if (searchResult.total > 0) {
               const mauticContactId = Object.keys(searchResult.contacts)[0];
-              await fetch(`${mauticUrl}/api/contacts/${mauticContactId}/edit`, { method: 'PATCH', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
+              const updateResponse = await fetch(`${mauticUrl}/api/contacts/${mauticContactId}/edit`, { method: 'PATCH', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
+              if (!updateResponse.ok) {
+                  const errorBody = await updateResponse.text();
+                  throw new Error(`Falha ao ATUALIZAR contato ${mauticContactId}: ${updateResponse.status} ${errorBody}`);
+              }
             } else {
-              await fetch(`${mauticUrl}/api/contacts/new`, { method: 'POST', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
+              const createResponse = await fetch(`${mauticUrl}/api/contacts/new`, { method: 'POST', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
+              if (!createResponse.ok) {
+                  const errorBody = await createResponse.text();
+                  throw new Error(`Falha ao CRIAR contato: ${createResponse.status} ${errorBody}`);
+              }
             }
           } catch (mauticError) {
             await appendLogs(supabaseAdmin, jobId, [`${timestamp()}  - ERRO Mautic para ${contact.email}: ${mauticError.message}`]);

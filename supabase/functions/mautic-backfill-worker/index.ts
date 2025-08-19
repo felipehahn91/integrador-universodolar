@@ -102,6 +102,10 @@ serve(async (req) => {
 
           const searchUrl = `${mauticUrl}/api/contacts?search=idmagazord:${contact.magazord_id}`;
           const searchResponse = await fetch(searchUrl, { headers: mauticHeaders });
+          if (!searchResponse.ok) {
+            const errorBody = await searchResponse.text();
+            throw new Error(`Falha ao BUSCAR contato: ${searchResponse.status} ${errorBody}`);
+          }
           const searchResult = await searchResponse.json();
           
           const nomeCompleto = contact.nome || '';
@@ -115,19 +119,25 @@ serve(async (req) => {
           };
 
           if (newTag) {
-            contactPayload.tags = newTag;
+            contactPayload.tags = [newTag];
           }
 
           if (searchResult.total > 0) {
             const mauticContactId = Object.keys(searchResult.contacts)[0];
             const updateUrl = `${mauticUrl}/api/contacts/${mauticContactId}/edit`;
             const updateResponse = await fetch(updateUrl, { method: 'PATCH', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
-            if (!updateResponse.ok) throw new Error(`Falha ao ATUALIZAR contato ${mauticContactId}: ${await updateResponse.text()}`);
+            if (!updateResponse.ok) {
+              const errorBody = await updateResponse.text();
+              throw new Error(`Falha ao ATUALIZAR contato ${mauticContactId}: ${updateResponse.status} ${errorBody}`);
+            }
             logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) atualizado ${newTag ? `com a tag ${newTag}` : 'sem nova tag'}.`);
           } else {
             const createUrl = `${mauticUrl}/api/contacts/new`;
             const createResponse = await fetch(createUrl, { method: 'POST', headers: mauticHeaders, body: JSON.stringify(contactPayload) });
-            if (!createResponse.ok) throw new Error(`Falha ao CRIAR contato: ${await createResponse.text()}`);
+            if (!createResponse.ok) {
+              const errorBody = await createResponse.text();
+              throw new Error(`Falha ao CRIAR contato: ${createResponse.status} ${errorBody}`);
+            }
             const createResult = await createResponse.json();
             const mauticContactId = createResult.contact.id;
             logs.push(`${timestamp()}  - Sucesso: ${contact.email} (ID Mautic: ${mauticContactId}) criado ${newTag ? `com a tag ${newTag}` : 'sem tag'}.`);
